@@ -207,7 +207,8 @@ fi
 echo
 info "Listo. Siguientes pasos"
 cat <<FIN
-  1. Cierra sesión y vuelve a entrar (Wayland no recarga extensiones en caliente).
+  1. Primera instalación: cierra sesión y vuelve a entrar (Wayland no carga extensiones nuevas en caliente).
+     Si ya la tenías, el código se recarga solo con 'kaito reload' (lo hace 'kaito update').
   2. Abre el indicador de Kaito en la barra superior > Ajustes y rellena:
        - URL de Jira (https://tuempresa.atlassian.net)
        - tu email de Atlassian

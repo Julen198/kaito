@@ -11,7 +11,7 @@ import {
     canDecide, agentsByTicket, shouldShowDaily, dailySummaryLines, localDay, warpTabToml, sortIssues, statusGroup,
     viewJql, visibleViews, normalizeCustomViews, projectsFromIssues, shortName, mapSearchIssue, RECENT_JQL,
     terminalMigration, resolveTerminal, gnomeTerminalArgv, kgxArgv, ptyxisExportsTab, terminalFocusLevel,
-    terminalFocusTarget, parseEnviron, TERMINALS,
+    terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck,
 } from './common.js';
 import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork} from './finish.js';
 import {parseTail, ticketFromHead, firstLine} from './agents.js';
@@ -515,5 +515,17 @@ if (GLib.find_program_in_path('git')) {
     eq(await detectWork('relativo', since), null, 'detectWork: ruta relativa');
     print(`repo git temporal: ${repo}`);
 }
+
+// Actualizaciones: salida de bin/kaito check --json / update con KAITO_UPDATE_FROM_SHELL=1
+eq(parseCheck('{"current":"0.1.0","latest":"0.2.0","behind":3}\n'), {behind: 3, latest: '0.2.0', current: '0.1.0'}, 'check con versión nueva');
+eq(parseCheck('{"current":"0.1.0","latest":null,"behind":0,"error":"fetch"}'), null, 'check sin red');
+eq(parseCheck('basura'), null, 'check ilegible');
+eq(parseUpdateMarker('==> Buscando\n  ✓ Actualizado a 0.2.0.\nkaito-update: version=0.2.0 relogin=1 updated=1\n'),
+    {version: '0.2.0', relogin: true, updated: true}, 'marcador de update');
+eq(parseUpdateMarker('kaito-update: version=0.1.0 relogin=0 updated=0'), {version: '0.1.0', relogin: false, updated: false}, 'marcador al día');
+eq(parseUpdateMarker('sin marcador'), null, 'sin marcador');
+eq(firstErrorLine('\x1b[1;34m==>\x1b[0m Buscando\n  \x1b[31m✗\x1b[0m El checkout tiene cambios locales; no se actualiza:\n  M x'),
+    'El checkout tiene cambios locales; no se actualiza:', 'primera línea de error');
+eq(firstErrorLine('fatal: no remote\n'), 'fatal: no remote', 'error de git');
 
 print(`kaito.test.js: ${n} comprobaciones OK`);

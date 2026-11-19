@@ -151,3 +151,9 @@
 .kaito-assign-btn { font-size: 0.85em; }
 .kaito-assign-note { font-size: 0.85em; padding: 2px 6px; }
 .kaito-assign-error { padding: 0 12px 4px 34px; font-size: 0.9em; }
+
+/* Aviso de versión nueva (arriba del menú) */
+.kaito-update { background-color: rgba(120,174,237,0.12); border-radius: 8px; margin: 0 6px 4px; }
+.kaito-update-text { font-size: 0.95em; }
+.kaito-update-btn { padding: 2px 10px; border-radius: 6px; background-color: rgba(120,174,237,0.3); font-weight: bold; }
+.kaito-update-btn:hover { background-color: rgba(120,174,237,0.45); }

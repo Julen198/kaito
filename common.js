@@ -114,6 +114,7 @@ export function readConfig() {
     cfg.pinned = raw.pinned === true;
     cfg.showUsage = raw.showUsage !== false;
     cfg.tasksEnabled = raw.tasksEnabled !== false;
+    cfg.checkUpdates = raw.checkUpdates !== false;
     cfg.captureMode = ['reminder', 'jira', 'task'].includes(raw.captureMode) ? raw.captureMode : 'note';
     cfg.terminal = TERMINALS.includes(raw.terminal) ? raw.terminal : 'auto';
     cfg.jiraView = typeof raw.jiraView === 'string' && raw.jiraView ? raw.jiraView : 'mine';
@@ -1254,14 +1255,27 @@ function pruneWarpTabs(keep) {
 }
 
 /** Abre la URI con un pequeño margen para que Warp vea el fichero recién escrito. */
-const openUriSoon = uri => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-    try {
-        Gio.AppInfo.launch_default_for_uri(uri, null);
-    } catch (e) {
-        console.warn(`kaito: no se pudo abrir ${uri}: ${e.message}`);
-    }
-    return GLib.SOURCE_REMOVE;
-});
+const _uriTimers = new Set();
+const openUriSoon = uri => {
+    const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+        _uriTimers.delete(id);
+        try {
+            Gio.AppInfo.launch_default_for_uri(uri, null);
+        } catch (e) {
+            console.warn(`kaito: no se pudo abrir ${uri}: ${e.message}`);
+        }
+        return GLib.SOURCE_REMOVE;
+    });
+    _uriTimers.add(id);
+    return id;
+};
+
+/** Cancela las aperturas pendientes (al desactivar o recargar la extensión). */
+export function cancelPendingUris() {
+    for (const id of _uriTimers)
+        GLib.source_remove(id);
+    _uriTimers.clear();
+}
 
 /**
  * Escribe el prompt y abre Claude en la terminal elegida (`terminal` de la config; 'auto' por defecto):
@@ -1559,4 +1573,33 @@ export function readCodexUsage(root = CODEX_SESSIONS, cache = codexCache, nowMon
         }
     }
     return cache.usage;
+}
+
+// --- Actualizaciones (bin/kaito check/update; los usa updates.js) ---
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g; // eslint-disable-line no-control-regex
+
+/** {version, relogin, updated} de la línea final de `kaito update` con KAITO_UPDATE_FROM_SHELL=1. */
+export function parseUpdateMarker(out) {
+    const m = /^kaito-update: version=(\S+) relogin=([01]) updated=([01])\s*$/m.exec(String(out ?? ''));
+    return m ? {version: m[1], relogin: m[2] === '1', updated: m[3] === '1'} : null;
+}
+
+/** Primera línea de error útil de la salida de `kaito update` (sin colores). */
+export function firstErrorLine(out) {
+    const lines = String(out ?? '').replace(ANSI_RE, '').split('\n').map(l => l.trim()).filter(Boolean);
+    const bad = lines.find(l => l.startsWith('✗')) ?? lines.find(l => /error|fatal|falló/i.test(l)) ?? lines.at(-1);
+    return (bad ?? 'error desconocido').replace(/^✗\s*/, '');
+}
+
+/** {behind, latest} de `kaito check --json`; null si no se pudo comprobar. */
+export function parseCheck(out) {
+    try {
+        const j = JSON.parse(String(out ?? '').trim().split('\n').at(-1));
+        if (j.error || !Number.isFinite(Number(j.behind)))
+            return null;
+        return {behind: Number(j.behind), latest: j.latest ?? null, current: j.current ?? null};
+    } catch {
+        return null;
+    }
 }

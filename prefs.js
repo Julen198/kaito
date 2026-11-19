@@ -356,6 +356,8 @@ export default class KaitoPreferences extends ExtensionPreferences {
             term.subtitle = terminalInfo(t);
         });
         general.add(term);
+        general.add(switchRow('Buscar actualizaciones',
+            'Cada 6 h mira si hay una versión nueva y la ofrece arriba del menú (solo si Kaito se instaló con git)', 'checkUpdates', cfg));
 
         // --- Tareas programadas ---
         const tasksGroup = new Adw.PreferencesGroup({

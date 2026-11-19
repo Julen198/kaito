@@ -62,10 +62,12 @@ function descMarkup(text) {
 export class CaptureModal {
     /**
      * @param {() => void} onSaved se llama tras guardar algo
-     * @param {object} opts {issueSummary(key) → string}: resumen de un ticket ya cargado (para elegir herramientas)
+     * @param {object} opts {issueSummary(key) → string}: resumen de un ticket ya cargado (para elegir herramientas);
+     *   {extensionDir}: carpeta real de la extensión (de ahí salen los iconos; el código corre desde una copia)
      */
     constructor(onSaved, opts = {}) {
         this._onSaved = onSaved;
+        this._extensionDir = opts.extensionDir;
         this._issueSummary = opts.issueSummary ?? (() => '');
         this._overlay = null;
         this._gen = 0;
@@ -161,7 +163,7 @@ export class CaptureModal {
         for (const m of MODES) {
             const content = new St.BoxLayout({style_class: 'kaito-capture-tab-content'});
             const icon = m.file
-                ? {gicon: new Gio.FileIcon({file: Gio.File.new_for_uri(import.meta.url).get_parent().get_child('icons').get_child(m.file)})}
+                ? {gicon: new Gio.FileIcon({file: Gio.File.new_for_path(GLib.build_filenamev([this._extensionDir, 'icons', m.file]))})}
                 : {icon_name: m.icon};
             content.add_child(new St.Icon({...icon, icon_size: 16, y_align: Clutter.ActorAlign.CENTER}));
             content.add_child(lbl(m.title));

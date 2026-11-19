@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CLI de Kaito: update, version, check, doctor, uninstall.
+# CLI de Kaito: update, reload, version, check, doctor, uninstall.
 set -uo pipefail
 
 UUID="kaito@runnea"
@@ -30,7 +30,8 @@ netgit() {
 usage() {
   cat <<USO
 Uso: kaito <comando>
-  update [--yes] [--force]   actualiza Kaito a la última versión
+  update [--yes] [--force]   actualiza Kaito a la última versión y la recarga en caliente
+  reload                     recarga el código de la extensión sin cerrar sesión
   version                    versión instalada
   check [--json]             ¿hay versión nueva? (rápido, silencioso sin red)
   doctor                     diagnóstico de la instalación
@@ -62,6 +63,19 @@ p=os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.confi
 try: t=json.load(open(p)).get("terminal")
 except Exception: t=None
 print(t if t in ("auto","ptyxis","gnome-terminal","kgx","warp","warp-window") else "auto")' 2>/dev/null || echo auto
+}
+
+# La extensión vigila este fichero: tocarlo recarga el código (main.js y módulos) sin cerrar sesión.
+TRIGGER="${XDG_CACHE_HOME:-$HOME/.cache}/kaito/reload"
+touch_trigger() { mkdir -p "$(dirname "$TRIGGER")" && touch "$TRIGGER"; }
+# Con KAITO_UPDATE_FROM_SHELL=1 (botón "Actualizar" del menú) la propia extensión recarga y lee esta línea.
+from_shell() { [ "${KAITO_UPDATE_FROM_SHELL:-0}" = 1 ]; }
+marker() { from_shell && echo "kaito-update: version=$(version) relogin=$1 updated=$2"; return 0; }
+
+cmd_reload() {
+  touch_trigger || die "No se pudo tocar $TRIGGER"
+  ok "Recarga pedida. Si no ves los cambios, cierra sesión y vuelve a entrar."
+  echo "  (Los cambios en extension.js o metadata.json siempre requieren cerrar sesión.)"
 }
 
 behind_count() { g rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0; }
@@ -111,16 +125,30 @@ cmd_update() {
   info "Buscando actualizaciones"
   GIT_TERMINAL_PROMPT=0 g fetch --quiet origin || die "No se pudo contactar con el repositorio (¿red / acceso?)."
   local behind; behind="$(behind_count)"
-  if [ "$behind" = 0 ]; then ok "Ya tienes la última versión ($(version))"; return 0; fi
+  if [ "$behind" = 0 ]; then ok "Ya tienes la última versión ($(version))"; marker 0 0; return 0; fi
   echo "  Cambios nuevos ($behind):"
   g log --oneline -n 15 'HEAD..@{u}' | sed 's/^/     /'
   [ "$behind" -gt 15 ] && echo "     … y $((behind - 15)) más"
+  local old; old="$(g rev-parse HEAD)"
   g pull --ff-only --quiet || die "git pull --ff-only falló (historia divergente)."
   info "Reinstalando"
   "$KAITO_HOME/install.sh" --no-statusline ${yes[@]+"${yes[@]}"} || die "install.sh falló."
   chmod +x "$KAITO_HOME/bin/kaito" 2>/dev/null || true
+  # El cargador (extension.js) y metadata.json los cachea gnome-shell: solo se aplican al volver a entrar.
+  local relogin=0 loader
+  loader="$(g diff --name-only "$old" HEAD -- extension.js metadata.json schemas/ 2>/dev/null)"
+  [ -n "$loader" ] && relogin=1
   echo
-  ok "Actualizado a $(version). Cierra sesión y vuelve a entrar para cargar la nueva versión (Wayland)."
+  if from_shell; then
+    ok "Actualizado a $(version)."
+  else
+    touch_trigger || true
+    ok "Actualizado a $(version). Recargado. Si no ves los cambios, cierra sesión y vuelve a entrar."
+  fi
+  if [ "$relogin" = 1 ]; then
+    warn "Han cambiado $(echo "$loader" | tr '\n' ' ')— eso solo se aplica cerrando sesión y volviendo a entrar."
+  fi
+  marker "$relogin" 1
 }
 
 cmd_doctor() {
@@ -180,9 +208,13 @@ cmd_uninstall() {
   else echo "  Código conservado en $KAITO_HOME (usa --purge para borrarlo)."; fi
 }
 
+# Entre llaves y con exit: bash lo lee entero antes de ejecutarlo, así un `git pull` que reescribe
+# este fichero a mitad de `kaito update` no hace que lea líneas nuevas a medias.
+{
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   update) cmd_update "$@" ;;
+  reload) cmd_reload ;;
   version|-v|--version) cmd_version ;;
   check) cmd_check "$@" ;;
   doctor) cmd_doctor ;;
@@ -190,3 +222,5 @@ case "$cmd" in
   help|-h|--help) usage ;;
   *) echo "Comando desconocido: $cmd" >&2; usage >&2; exit 2 ;;
 esac
+exit $?
+}

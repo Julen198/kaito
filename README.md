@@ -27,6 +27,9 @@ Variables: `KAITO_REPO`, `KAITO_BRANCH` (main), `KAITO_HOME` (`~/.local/share/ka
 El bootstrap clona, ejecuta `install.sh` y deja el comando `kaito` en `~/.local/bin`.
 
 - **Actualizar:** `kaito update` (`--yes` sin preguntas; `--force` guarda cambios locales con stash).
+  Se recarga en caliente, sin cerrar sesión. Con "Buscar actualizaciones" activo (Ajustes > General),
+  el menú avisa arriba ("Hay una versión nueva (x.y.z) · Actualizar") y el botón hace lo mismo.
+- **Recargar el código:** `kaito reload` (útil al desarrollar: aplica los cambios de `*.js` y `stylesheet.css`).
 - **Diagnóstico:** `kaito doctor`. También `kaito version` y `kaito check [--json]`.
 - **Desinstalar:** `kaito uninstall` (`--purge` borra también el código y los datos).
 
@@ -60,7 +63,8 @@ git clone https://github.com/Julen198/kaito.git ~/kaito && cd ~/kaito
 
 Opciones: `--dry-run` (no cambia nada), `--yes`, `--no-hooks`, `--statusline` / `--no-statusline`, `--copy`.
 
-Después **cierra sesión y vuelve a entrar** (Wayland no recarga extensiones en caliente).
+Después, la primera vez, **cierra sesión y vuelve a entrar** (Wayland no carga extensiones nuevas en caliente;
+las actualizaciones posteriores se recargan solas, ver "Recarga en caliente").
 
 ### Configurar Jira
 
@@ -88,6 +92,26 @@ llama a `hooks/kaito-statusline.py` desde tu script (recibe el JSON por stdin).
 ```
 
 El token de Jira queda en el llavero: `secret-tool clear service jira`.
+
+### Recarga en caliente (cómo funciona)
+
+En Wayland gnome-shell cachea cada módulo ES por su URL durante toda la sesión, así que desactivar y
+activar la extensión volvería a usar el código viejo. Por eso `extension.js` es solo un **cargador**:
+
+- copia los `*.js` (menos `extension.js`, `prefs.js` y los tests) a `~/.cache/kaito/build/<hash>/` y
+  hace `import()` de `main.js` desde ahí: cada versión, y todos sus imports relativos, tienen URL nueva;
+- vigila `~/.cache/kaito/reload`: tocarlo (`kaito reload`, `kaito update`, botón "Actualizar") desactiva
+  la versión en marcha, recarga `stylesheet.css` e importa la nueva; se guardan las 2 últimas builds;
+- si la nueva no importa o falla al activarse, lo registra (`journalctl --user -b | grep kaito`),
+  avisa con una notificación y vuelve a activar la anterior.
+
+Los iconos, `bin/`, `hooks/`, `schemas/` y `stylesheet.css` se leen siempre de la carpeta real de la
+extensión (nunca junto al módulo copiado). Las clases GObject llevan el hash de la build en su nombre
+de tipo (`KaitoIndicator_<hash>`) porque GType no admite registrar dos veces el mismo nombre.
+
+**Requiere cerrar sesión:** los cambios en `extension.js` (el cargador; mantenlo mínimo), en
+`metadata.json` y en `schemas/`. `kaito update` lo avisa cuando pasa. `prefs.js` corre en otro proceso
+y se recarga solo al reabrir Ajustes.
 
 ### Problemas frecuentes
 
@@ -118,7 +142,7 @@ Menú del indicador > Ajustes (o `gnome-extensions prefs kaito@runnea`): conexi�
 ventana de actividad de agentes, intervalo de refresco y borrado de pendientes hechos.
 Se guardan en `config.json` (`jiraJql`, `jiraPreset`, `jiraMax`, `jiraView`, `jiraViews`, `jiraBuiltinViews`, `jiraProjects`, `terminal`, `agentWindowMinutes`,
 `liveSeconds`, `refreshSeconds`, `notifyNeeds`, `notifyDone`, `dailySummary`, `pinned`, `showUsage`,
-`tasksEnabled`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
+`tasksEnabled`, `checkUpdates`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
 `~/Documentos`, `~/Documents`, `~/dev`, `~/code`, `~/projects` y `~/src`.
 
 `pinned` (Ajustes > General > "Mostrar siempre desplegado") deja un panel fijo arriba a la
