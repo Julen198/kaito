@@ -10,6 +10,16 @@ notas, recordatorios y tareas programadas de Claude.
 
 ## Instalar
 
+| Entorno | Comando (en una terminal) |
+|---|---|
+| **Linux** con GNOME 46–50 (Ubuntu 24.04+, Debian 13, Fedora 40+) | `curl -fsSL https://raw.githubusercontent.com/Julen198/kaito/main/bootstrap.sh \| bash` |
+| **macOS** 14 o posterior (Apple Silicon e Intel) | `curl -fsSL https://raw.githubusercontent.com/Julen198/kaito/main/macos/install-mac.sh \| bash` |
+
+En los dos: después actualizas con `kaito update` (o el botón del menú) y lo quitas con `kaito uninstall`.
+Luego abre **Kaito → Ajustes** para poner tu Jira (URL, email y token) o desactivarlo.
+
+### Linux
+
 Instalación en una línea:
 
 ```sh
