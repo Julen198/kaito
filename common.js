@@ -7,6 +7,9 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {parseTail, ticketFromHead} from './agents.js';
 import {normalizeWorkHours} from './quiet.js';
+import {gitInstructions, migrateTodos, newTask} from './board.js';
+import {normalizeInbox} from './inbox.js';
+import {USAGE_COLORS, usageColor, formatReset, opencodeProvider, normalizePanelProvider} from './usage.js';
 import {
     detectProviders, searchDirs, normalizeProviderToggles, matchAgentProcess, dedupeProcesses,
     parseRolloutMeta, parseCodexTail, codexStatus, rolloutId,
@@ -129,9 +132,12 @@ export function readConfig() {
     cfg.dailySummary = raw.dailySummary !== false;
     cfg.pinned = raw.pinned === true;
     cfg.showUsage = raw.showUsage !== false;
+    cfg.usagePanelProvider = normalizePanelProvider(raw.usagePanelProvider);
     cfg.tasksEnabled = raw.tasksEnabled !== false;
     cfg.checkUpdates = raw.checkUpdates !== false;
     cfg.jiraEnabled = raw.jiraEnabled !== false;
+    cfg.kanbanEnabled = raw.kanbanEnabled === true; // opcional: tablero de tareas
+    cfg.inboxEnabled = raw.inboxEnabled === true; // opcional: panel de avisos
     cfg.workHours = normalizeWorkHours(raw.workHours);
     cfg.dndManual = raw.dndManual === true;
     for (const k of ['dndUntil', 'dndSkipUntil']) {
@@ -1101,11 +1107,7 @@ export function buildPrompt(issue, base, detail, repo = null, branch = null) {
         s += 'Todo el contenido del ticket está abajo; no intentes abrir el enlace de Jira (requiere login).\n';
         if (little)
             s += 'El ticket tiene poco detalle: antes de cambiar código, explora el repo, resume lo que entiendes y pregúntame lo que falte.\n';
-        s += `Git: trabaja en una rama propia (si estás en main, master o develop, crea una llamada ${issue.key}-<resumen-corto>). ` +
-            `Haz commits pequeños a medida que completes partes, con mensajes que empiecen por "${issue.key}: ". ` +
-            'Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con ' +
-            '`git push -u origin <rama>`. Nunca hagas push a main, master ni develop, nunca uses force-push ' +
-            'y no abras PR.\n';
+        s += gitInstructions(issue.key, `${issue.key}-<resumen-corto>`);
         const blocks = [d.meta, description && `Descripción:\n${description}`, d.extra,
             comments.length && `Comentarios:\n${comments.join('\n')}`].filter(Boolean);
         return blocks.length ? `${s}\n${blocks.join('\n\n')}\n` : s;
@@ -1308,9 +1310,10 @@ export function cancelPendingUris() {
  * - warp: Tab Config + warp://tab_config/<nombre> → pestaña nueva en la ventana activa de Warp.
  * - warp-window: launch configuration + warp://launch/<fichero> → ventana nueva (comportamiento antiguo).
  * `launch` permite sustituir el arranque real (tests); `probe`, la detección de 'auto'.
+ * `prompt`: prompt ya construido (tareas K-<n> del tablero); sin él se construye el del ticket de Jira.
  * Devuelve {terminal, promptPath, yamlPath?|tomlPath?, uri?, argv?}.
  */
-export function sendIssueToClaude({issue, base, description, repo, terminal}, launch = null, probe = defaultProbe) {
+export function sendIssueToClaude({issue, base, description, repo, terminal, prompt = null}, launch = null, probe = defaultProbe) {
     if (!KEY_RE.test(issue.key))
         throw new Error(`clave no válida: ${issue.key}`);
     if (!repo.startsWith('/') || !GLib.file_test(repo, GLib.FileTest.IS_DIR))
@@ -1320,7 +1323,8 @@ export function sendIssueToClaude({issue, base, description, repo, terminal}, la
         throw new Error('no hay ninguna terminal compatible (ptyxis, gnome-terminal, kgx o warp)');
     GLib.mkdir_with_parents(PROMPTS_DIR, 0o700);
     const promptPath = GLib.build_filenamev([PROMPTS_DIR, `${issue.key}.txt`]);
-    GLib.file_set_contents(promptPath, buildPrompt(issue, base, description, repo, repoBranch(repo)));
+    // `prompt`: texto ya hecho (tareas locales del tablero, board.js localTaskPrompt); si no, el del ticket.
+    GLib.file_set_contents(promptPath, prompt ?? buildPrompt(issue, base, description, repo, repoBranch(repo)));
     const openUri = launch ?? (o => openUriSoon(o.uri));
     if (term.id === 'warp') {
         GLib.mkdir_with_parents(WARP_TAB_DIR, 0o755);
@@ -1350,17 +1354,11 @@ export function sendIssueToClaude({issue, base, description, repo, terminal}, la
 
 // --- Uso de Claude (statusLine) y Codex (rollouts): límites de 5 h y semanales ---
 
-export const USAGE_COLORS = {ok: '#5BC8AF', warn: '#FFA348', crit: '#E5493A'};
+export {USAGE_COLORS, usageColor, formatReset};
 const CODEX_TAIL_BYTES = 256 * 1024;
 const CODEX_MAX_DAYS = 7; // carpetas de fecha recientes que se miran
 const CODEX_MAX_TRY = 3; // ficheros (del más nuevo al más viejo) que se leen buscando datos
 const CODEX_RECHECK_S = 60;
-const DOW = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
-
-/** Verde < 70 %, naranja 70-90 %, rojo >= 90 %. */
-export function usageColor(pct) {
-    return pct >= 90 ? USAGE_COLORS.crit : pct >= 70 ? USAGE_COLORS.warn : USAGE_COLORS.ok;
-}
 
 export const clampPct = x => Math.min(100, Math.max(0, Number(x)));
 
@@ -1460,16 +1458,6 @@ export function applyStaleness(win, nowS) {
     return {pct: reset ? 0 : win.pct, resetsAt: win.resetsAt, reset};
 }
 
-/** "14:30" (hoy) o "lun 09:00" (otro día); con forceDay también hoy: "hoy 09:00". */
-export function formatReset(resetsAt, nowS, forceDay = false) {
-    const d = new Date(resetsAt * 1000);
-    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    const today = new Date(nowS * 1000);
-    if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate())
-        return forceDay ? `hoy ${hm}` : hm;
-    return `${DOW[d.getDay()]} ${hm}`;
-}
-
 /** "5 h 42% · se reinicia 14:30", "Semana 18% · lun 09:00", "5 h 0% · reiniciado". */
 export function usageLabel(kind, win, nowS) {
     const name = kind === 'five' ? '5 h' : 'Semana';
@@ -1505,11 +1493,37 @@ export function usageView(u, nowS) {
         return a && {...a, label: usageLabel(kind, a, nowS), color: usageColor(a.pct)};
     };
     const five = mk('five', u.five), week = mk('week', u.week);
-    return five || week ? {five, week, age: ageLabel(u.ts, nowS)} : null;
+    return five || week ? {five, week, age: ageLabel(u.ts, nowS), ts: u.ts ?? null} : null;
 }
 
 export function readClaudeUsage(path = CLAUDE_USAGE_PATH) {
     return parseClaudeUsage(readJson(path, null));
+}
+
+/** JSON con comentarios de línea (opencode.jsonc): se quitan las líneas que empiezan por //. Solo lectura. */
+function readJsonc(path) {
+    const t = readBytesText(path);
+    if (t === null)
+        return null;
+    try {
+        return JSON.parse(t.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n'));
+    } catch (_e) {
+        return null;
+    }
+}
+
+const opencodeCache = {t: -Infinity, id: null};
+/** Proveedor del modelo de OpenCode (su config o el último modelo usado); solo lectura, caché de 60 s. */
+export function readOpencodeProvider(nowMono = GLib.get_monotonic_time() / 1e6) {
+    if (nowMono - opencodeCache.t < 60)
+        return opencodeCache.id;
+    const conf = GLib.build_filenamev([GLib.get_user_config_dir(), 'opencode']);
+    const config = readJsonc(GLib.build_filenamev([conf, 'opencode.json'])) ?? readJsonc(GLib.build_filenamev([conf, 'opencode.jsonc']));
+    const stateDir = GLib.getenv('XDG_STATE_HOME') || GLib.build_filenamev([GLib.get_home_dir(), '.local', 'state']);
+    const state = readJsonc(GLib.build_filenamev([stateDir, 'opencode', 'model.json']));
+    opencodeCache.id = opencodeProvider(config, state);
+    opencodeCache.t = nowMono;
+    return opencodeCache.id;
 }
 
 /** Ficheros rollout-*.jsonl recientes [{path, mtime, size}], del más nuevo al más viejo. */
@@ -1668,6 +1682,67 @@ export function readQuietQueue() {
 export function writeQuietQueue(queue) {
     GLib.mkdir_with_parents(CACHE_DIR, 0o755);
     GLib.file_set_contents(QUIET_QUEUE_PATH, JSON.stringify(queue));
+}
+
+// --- Tablero de tareas (board.js): todos.json ampliado + contador K-<n> en kanban.json ---
+
+export const KANBAN_PATH = GLib.build_filenamev([CONF_DIR, 'kanban.json']);
+// `kaito kanban` toca este fichero; la extensión lo vigila y abre el tablero.
+export const OPEN_KANBAN_PATH = GLib.build_filenamev([CACHE_DIR, 'open-kanban']);
+
+export function readTodos() {
+    const v = readJson(TODOS_PATH, []);
+    return Array.isArray(v) ? v : [];
+}
+
+/** Pendientes migrados a tareas (ids K-<n>, estado, prioridad); escribe solo si algo cambió. */
+export function readBoard() {
+    const raw = readTodos();
+    const seq = Number(readJson(KANBAN_PATH, {})?.seq) || 0;
+    const r = migrateTodos(raw, seq);
+    if (r.changed)
+        writeJson(TODOS_PATH, r.todos);
+    if (r.seq !== seq)
+        writeJson(KANBAN_PATH, {seq: r.seq});
+    return r.todos;
+}
+
+/** Lectura-modificación-escritura de una tarea por id (fn recibe una copia y devuelve la nueva, o null para borrarla). */
+export function patchBoardTask(id, fn) {
+    const todos = readBoard();
+    const i = todos.findIndex(t => t.id === id);
+    if (i < 0)
+        return null;
+    const next = fn({...todos[i]});
+    if (next && JSON.stringify(next) === JSON.stringify(todos[i]))
+        return next; // sin cambios: no se reescribe (el monitor de todos.json repintaría por nada)
+    if (next)
+        todos[i] = next;
+    else
+        todos.splice(i, 1);
+    writeJson(TODOS_PATH, todos);
+    return next;
+}
+
+/** Añade una tarea nueva (K-<n>) y devuelve la tarea. */
+export function addBoardTask(fields) {
+    const todos = readBoard();
+    const seq = Number(readJson(KANBAN_PATH, {})?.seq) || 0;
+    const {task, seq: n} = newTask(todos, seq, fields);
+    writeJson(TODOS_PATH, [...todos, task]);
+    writeJson(KANBAN_PATH, {seq: n});
+    return task;
+}
+
+// --- Panel de avisos (inbox.js): ~/.cache/kaito/inbox.json ---
+
+export const INBOX_PATH = GLib.build_filenamev([CACHE_DIR, 'inbox.json']);
+
+export const readInbox = () => normalizeInbox(readJson(INBOX_PATH, []));
+
+export function writeInbox(list) {
+    GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+    GLib.file_set_contents(INBOX_PATH, JSON.stringify(list));
 }
 
 // --- Proveedores de agentes (providers.js): ejecutables instalados y sesiones vivas ---

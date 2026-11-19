@@ -1,3 +1,4 @@
+import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -22,12 +23,19 @@ import {
     readNotes, readReminders, readDismissed, writeDismissed, applyDismissed, ancestorPids,
     collectRepos, scanRepos, filterRepos, rankRepos, fetchIssueDescription, sendIssueToClaude, priorityKind, projectOf,
     agentsByTicket, dailySummaryLines, shouldShowDaily, readDailyDay, writeDailyDay, localDay, addReminder,
-    CLAUDE_USAGE_PATH, readClaudeUsage, readCodexUsage, usageView,
+    CLAUDE_USAGE_PATH, readClaudeUsage, readCodexUsage, usageView, readOpencodeProvider,
     fetchJiraJql, visibleViews, viewJql, projectsFromIssues, resolveProjects, shortName, migrateTerminalOnce,
     processChain, terminalFocusTarget, cancelPendingUris,
     installedProviders, collectOtherAgents, changelogBody, readUpdateState, writeUpdateState,
+    readBoard, readTodos, patchBoardTask, addBoardTask, OPEN_KANBAN_PATH, INBOX_PATH, readInbox, writeInbox,
+    canDecide, writeDecision, patchReminder, repoBranch,
 } from './common.js';
+import {KanbanBoard} from './kanban.js';
+import {InboxPanel} from './inboxui.js';
+import {STATE_NAMES, isLocalKey, todoState, withState, localTaskPrompt, taskSlug} from './board.js';
+import {inboxPush, inboxRoute, unreadCount, pendingNeeds, resolveItem} from './inbox.js';
 import {QuietController} from './dnd.js';
+import {RING, MINI_RING, RING_TRACK, DIM_OPACITY, USAGE_COLUMNS, BADGE_ICONS, hexRgb, usageRows, panelRing} from './usage.js';
 import {PROVIDER_BY_ID} from './providers.js';
 import {quietLabel} from './quiet.js';
 import {findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
@@ -45,6 +53,9 @@ const CARD_MARGIN = 12;
 const NOTES_SHOWN = 5;
 const JIRA_MAX_H = 320; // alto máximo (px lógicos) de la lista de tickets
 const SHORTCUT_KEY = 'capture-shortcut';
+const KANBAN_KEY = 'kanban-shortcut'; // clave nueva del esquema (0.5.0): sin volver a entrar puede no existir aún
+const STATE_PILL = {todo: 'kaito-pill-new', doing: 'kaito-pill-doing', review: 'kaito-pill-review', done: 'kaito-pill-done'};
+const SNOOZE_MS = 10 * 60 * 1000;
 const PILL = {new: 'kaito-pill-new', indeterminate: 'kaito-pill-progress', done: 'kaito-pill-done'};
 const PICK_MAX = 12;
 const PICK_PILL = {issue: 'este ticket', match: 'coincide', project: 'último'};
@@ -132,33 +143,75 @@ function sideButton(accessibleName, child, onClick) {
 
 const PRIORITY_NAMES = {highest: 'Más alta', high: 'Alta', medium: 'Media', low: 'Baja', lowest: 'Más baja'};
 
-const USAGE_FILL_MIN = 3; // px: que un uso pequeño pero no nulo se vea
+/**
+ * Anillo de uso (St.DrawingArea + Cairo): pista tenue y arco desde las 12 en el sentido del reloj, con
+ * extremos redondeados. El tamaño viene del CSS (escala del tema incluida) y el trazo escala con él.
+ * set({frac, color}) guarda el valor y pide repintar.
+ */
+function usageRing(spec = RING, styleClass = 'kaito-ring') {
+    const area = new St.DrawingArea({style_class: styleClass, y_align: Clutter.ActorAlign.CENTER});
+    const ring = {actor: area, frac: 0, color: '#5BC8AF'};
+    area.connect('repaint', a => {
+        const cr = a.get_context();
+        try {
+            const [w, h] = a.get_surface_size();
+            const size = Math.min(w, h);
+            if (size <= 0)
+                return;
+            const lw = spec.stroke * size / spec.size;
+            const r = (size - lw) / 2;
+            cr.setLineWidth(lw);
+            cr.setLineCap(Cairo.LineCap.ROUND);
+            cr.setSourceRGBA(...RING_TRACK);
+            cr.arc(w / 2, h / 2, r, 0, 2 * Math.PI);
+            cr.stroke();
+            if (ring.frac > 0) {
+                const start = -Math.PI / 2;
+                cr.setSourceRGBA(...hexRgb(ring.color), 1);
+                cr.arc(w / 2, h / 2, r, start, start + 2 * Math.PI * ring.frac);
+                cr.stroke();
+            }
+        } finally {
+            cr.$dispose();
+        }
+    });
+    ring.set = ({frac, color}) => {
+        ring.frac = frac;
+        ring.color = color;
+        area.queue_repaint();
+    };
+    return ring;
+}
 
-/** Barra fina: pista (St.Widget) con un hijo de relleno cuyo ancho es el porcentaje de la pista. */
-function usageBar(styleClass = 'kaito-usage-track') {
-    const track = new St.Widget({
-        style_class: styleClass, layout_manager: new Clutter.BinLayout(),
-        x_expand: true, y_align: Clutter.ActorAlign.CENTER,
+const badgeIconCache = new Map();
+/** Icono que instala la app del proveedor en el tema (hicolor: /usr/share/icons, ~/.local/share/icons), o null. */
+function providerIconName(id) {
+    if (!badgeIconCache.has(id)) {
+        let found = null;
+        try {
+            const theme = new St.IconTheme();
+            found = (BADGE_ICONS[id] ?? []).find(n => theme.lookup_icon(n, 32, 0)) ?? null;
+        } catch (e) {
+            console.warn(`kaito: icono de ${id}: ${e.message}`);
+        }
+        badgeIconCache.set(id, found);
+    }
+    return badgeIconCache.get(id);
+}
+
+/** Insignia de 30 px: el icono del proveedor si está instalado; si no, su inicial sobre su color. */
+function providerBadge(row) {
+    const icon = providerIconName(row.id);
+    const box = new St.Bin({
+        style_class: icon ? 'kaito-usage-badge kaito-usage-badge-icon' : 'kaito-usage-badge',
+        style: icon ? null : `background-color: ${row.badge.bg};`,
+        y_align: Clutter.ActorAlign.CENTER, reactive: true, track_hover: true, accessible_name: row.tooltip,
     });
-    const fill = new St.Widget({
-        style_class: 'kaito-usage-fill', x_align: Clutter.ActorAlign.START,
-        y_expand: true, y_align: Clutter.ActorAlign.FILL,
-    });
-    track.add_child(fill);
-    const bar = {track, fill, pct: 0};
-    const apply = () => {
-        if (!track.get_stage())
-            return; // sin escenario no hay tema ni ancho; se aplicará al asignarse tamaño
-        const w = track.get_width();
-        fill.width = bar.pct <= 0 ? 0 : Math.min(w, Math.max(USAGE_FILL_MIN, Math.round(w * bar.pct / 100)));
-    };
-    track.connect('notify::allocation', apply);
-    bar.set = (pct, color) => {
-        bar.pct = pct;
-        fill.set_style(`background-color: ${color};`);
-        apply();
-    };
-    return bar;
+    box.set_child(icon
+        ? new St.Icon({icon_name: icon, icon_size: 28})
+        : new St.Label({text: row.badge.letter, style_class: 'kaito-usage-letter', style: `color: ${row.badge.fg};`,
+            x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER}));
+    return box;
 }
 
 function spacer() {
@@ -196,6 +249,9 @@ function prettyAccel(accel) {
         .replace(/space$/i, 'Espacio').replace(/\+([a-z])$/, (_m, c) => `+${c.toUpperCase()}`);
 }
 
+// PanelMenu.Button de GNOME 46–49 abre el menú en vfunc_event; el de 50 usa un Clutter.ClickGesture.
+const PANEL_BUTTON_HAS_EVENT = Object.prototype.hasOwnProperty.call(PanelMenu.Button.prototype, 'vfunc_event');
+
 // Clase GObject registrada una vez por evaluación del módulo. Cada build recargada en caliente es un
 // módulo nuevo y GType no admite dos tipos con el mismo nombre: el nombre lleva el id de la build.
 let Indicator = null;
@@ -212,6 +268,9 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         for (const k of Object.keys(PRIORITY_NAMES))
             this._icons[`prio-${k}`] = new Gio.FileIcon({file: Gio.File.new_for_path(`${extension.path}/icons/priority-${k}.svg`)});
         this._buildPanel();
+        // GNOME 50: PanelMenu.Button abre el menú con un Clutter.ClickGesture que reconoce al pulsar y se
+        // adelantaría al clic de la campana; ahí no se deja reconocer si la pulsación cae en la campana.
+        this._clickGesture?.connect?.('may-recognize', g => !this._pressOnBell(g));
         this.menu.box.add_style_class_name('kaito-menu');
         this._session = new Soup.Session({timeout: 15});
         this._cancellable = new Gio.Cancellable();
@@ -247,6 +306,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._counters = {};
         this._headers = {};
         this._usage = {claude: null, codex: null};
+        this._usageRows = [];
         for (const [id, title] of SECTIONS) {
             this._addHeader(id, title);
             this._sections[id] = new PopupMenu.PopupMenuSection();
@@ -300,6 +360,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
         GLib.mkdir_with_parents(STATE_DIR, 0o755);
         GLib.mkdir_with_parents(CONF_DIR, 0o755);
+        this._inboxStats = {unread: 0, needs: false};
         // Estados de los hooks: solo agentes. Config (p. ej. "pinned" desde Ajustes): todo.
         this._watch(Gio.File.new_for_path(STATE_DIR), 'dir', 'state', () => this.refreshLocal());
         this._watch(Gio.File.new_for_path(CONFIG_PATH), 'file', 'config', () => this._onConfigChanged());
@@ -307,6 +368,25 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._watch(Gio.File.new_for_path(TASKS_PATH), 'file', 'tasks', () => {
             this._renderSection('tasks');
             this._updateLabel();
+        });
+        // Tablero: todos.json cambiado desde otro sitio (tablero, prefs) y `kaito kanban`.
+        this._watch(Gio.File.new_for_path(TODOS_PATH), 'file', 'todos', () => {
+            this._renderSection('todos');
+            this._updateLabel();
+            this._ext.kanban?.refresh();
+        });
+        this._watch(Gio.File.new_for_path(OPEN_KANBAN_PATH), 'file', 'open-kanban', () => {
+            if (!GLib.file_test(OPEN_KANBAN_PATH, GLib.FileTest.EXISTS))
+                return;
+            if (readConfig().kanbanEnabled)
+                this._ext.openKanban();
+            else
+                Main.notify('Kaito', 'El tablero de tareas está desactivado: actívalo en Ajustes');
+        });
+        this._watch(Gio.File.new_for_path(INBOX_PATH), 'file', 'inbox', () => {
+            this._loadInboxStats();
+            this._updateLabel();
+            this._ext.inbox?.refresh();
         });
         for (const [path, key] of [[NOTES_PATH, 'notes'], [REMINDERS_PATH, 'reminders']]) {
             this._watch(Gio.File.new_for_path(path), 'file', key, () => {
@@ -402,15 +482,66 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             box.add_child(seg);
             this._seg[id] = {seg, dot: d, num: n};
         }
-        // Mini barra del uso de Claude (5 h), tras los segmentos; oculta sin datos.
-        this._mini = usageBar('kaito-usage-mini');
-        this._mini.track.x_expand = false;
-        this._mini.track.visible = false;
-        box.add_child(this._mini.track);
+        // Panel de avisos (opcional): campana con los no leídos y punto naranja si alguien te necesita.
+        // Botón propio: su clic no abre el menú (el St.Button se queda el evento).
+        const bellBox = new St.BoxLayout({style_class: 'kaito-seg', y_align: Clutter.ActorAlign.CENTER});
+        bellBox.add_child(new St.Icon({
+            icon_name: 'preferences-system-notifications-symbolic', icon_size: 15,
+            style_class: 'kaito-icon', y_align: Clutter.ActorAlign.CENTER,
+        }));
+        const bellNum = mkLabel('0', 'kaito-count');
+        bellBox.add_child(bellNum);
+        const bellDot = new St.Widget({style_class: 'kaito-bell-dot', visible: false, y_align: Clutter.ActorAlign.START});
+        bellBox.add_child(bellDot);
+        const bell = new St.Button({
+            style_class: 'kaito-bell', child: bellBox, can_focus: true, track_hover: true, visible: false,
+            y_align: Clutter.ActorAlign.CENTER, accessible_name: 'Avisos',
+        });
+        bell.connect('clicked', () => {
+            this.menu.close();
+            this._ext.openInbox();
+        });
+        box.add_child(bell);
+        this._bell = {btn: bell, num: bellNum, dot: bellDot};
+        // Mini anillo del uso de 5 h (proveedor de Ajustes, Claude por defecto), tras los segmentos; oculto sin datos.
+        this._mini = usageRing(MINI_RING, 'kaito-ring-mini');
+        this._mini.actor.visible = false;
+        box.add_child(this._mini.actor);
         // Punto de "hay versión nueva", arriba a la derecha del indicador, hasta actualizar.
         this._badge = new St.Widget({style_class: 'kaito-update-badge', visible: false, y_align: Clutter.ActorAlign.START});
         box.add_child(this._badge);
         this.add_child(box);
+    }
+
+    _pressOnBell(gesture) {
+        let p = null;
+        try {
+            p = gesture.get_coords_abs?.();
+        } catch (_e) { /* sin coordenadas: se usa el hover */ }
+        return this._onBell(p ? [p.x, p.y] : null);
+    }
+
+    /** ¿Cae el punto (coordenadas de escenario) en la campana visible? Sin punto: su hover. */
+    _onBell(xy) {
+        const bell = this._bell?.btn;
+        if (!bell?.visible || !bell.mapped)
+            return false;
+        if (!xy)
+            return bell.hover;
+        const [x, y] = bell.get_transformed_position();
+        const [w, h] = bell.get_transformed_size();
+        return xy[0] >= x && xy[0] < x + w && xy[1] >= y && xy[1] < y + h;
+    }
+
+    // GNOME 46–49: PanelMenu.Button abre el menú en vfunc_event al pulsar. En 49 el St.Button de la campana
+    // ya no se queda la pulsación (usa gestos), así que una pulsación sobre la campana no abre el menú.
+    vfunc_event(event) {
+        const t = event.type();
+        if (!PANEL_BUTTON_HAS_EVENT) // GNOME 50: gestos; St/Clutter no implementan vfunc_event (llamarlo lanza)
+            return Clutter.EVENT_PROPAGATE;
+        if ((t === Clutter.EventType.BUTTON_PRESS || t === Clutter.EventType.TOUCH_BEGIN) && this._onBell(event.get_coords()))
+            return Clutter.EVENT_PROPAGATE;
+        return super.vfunc_event(event);
     }
 
     /** Punto del panel según el aviso de actualización. */
@@ -432,6 +563,13 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             console.warn(`kaito: update.json: ${e.message}`);
         }
         const title = `Kaito ${version} disponible`;
+        if (this._cfg.inboxEnabled) { // solo panel (y el punto azul de siempre)
+            this._ext.inboxAdd({
+                id: `update:${version}`, kind: 'update', title, body: changelogBody(c.changes),
+                actions: [{label: 'Actualizar', action: {type: 'update'}}],
+            });
+            return;
+        }
         if (this._ext.quiet?.defer({key: 'update', text: title, action: {type: 'update'}}))
             return;
         const update = () => this._update?.update().catch(e => console.warn(`kaito: actualizar: ${e.message}`));
@@ -465,12 +603,12 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const item = staticItem();
         item.add_style_class_name('kaito-header');
         const h = this._headerRow(title);
+        (this._headerTitles ??= {})[id] = h.title;
         item.add_child(h.title);
         item.add_child(h.spacer);
         item.add_child(h.count);
         this._counters[id] = h.count;
         this._headers[id] = item;
-        h.count.visible = id !== 'usage';
         this.menu.addMenuItem(item);
     }
 
@@ -488,11 +626,26 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             const text = entry.get_text().trim();
             if (!text)
                 return;
-            const todos = readJson(TODOS_PATH, []);
-            todos.push({text, done: false});
-            this._saveTodos(todos);
+            if (this._cfg.kanbanEnabled) {
+                try {
+                    addBoardTask({text});
+                } catch (e) {
+                    console.error(`kaito: no se pudo guardar la tarea: ${e.message}`);
+                }
+                this._renderSection('todos');
+                this._updateLabel();
+                this._ext.kanban?.refresh();
+            } else {
+                const todos = readJson(TODOS_PATH, []);
+                todos.push({text, done: false});
+                this._saveTodos(todos);
+            }
             entry.set_text('');
         });
+        (this._todoEntries ??= new Set()).add(entry);
+        entry.connect('destroy', () => this._todoEntries?.delete(entry));
+        if (this._cfg.kanbanEnabled)
+            entry.hint_text = 'Añadir tarea y pulsar Enter';
         return entry;
     }
 
@@ -500,6 +653,22 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'kaito-row'});
         item.add_child(this._makeEntry());
         this.menu.addMenuItem(item);
+
+        // Opcionales (Ajustes): tablero de tareas y panel de avisos; ocultos si están desactivados.
+        const board = new PopupMenu.PopupMenuItem('Abrir tablero');
+        this._kanbanLabel = mkLabel('', 'kaito-muted');
+        this._kanbanLabel.x_expand = true;
+        this._kanbanLabel.x_align = Clutter.ActorAlign.END;
+        board.add_child(this._kanbanLabel);
+        board.connect('activate', () => this._ext.openKanban());
+        board.visible = false;
+        this.menu.addMenuItem(board);
+        this._kanbanItem = board;
+        const inbox = new PopupMenu.PopupMenuItem('Avisos');
+        inbox.connect('activate', () => this._ext.openInbox());
+        inbox.visible = false;
+        this.menu.addMenuItem(inbox);
+        this._inboxItem = inbox;
 
         const capture = new PopupMenu.PopupMenuItem('Nueva nota, recordatorio o tarea');
         this._shortcutLabel = mkLabel('', 'kaito-muted');
@@ -522,7 +691,12 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     _buildDnd() {
         const sw = new PopupMenu.PopupSwitchMenuItem('No molestar', false);
         sw.add_style_class_name('kaito-dnd');
-        sw.connect('toggled', (_i, on) => this._ext.quiet?.set(on ? 'on' : 'off'));
+        // En GNOME 50 setToggleState() (syncQuiet) también emite 'toggled': si ya está en ese estado no se toca,
+        // o "1 h", "Hasta mañana" y los minutos del panel de avisos se convertirían en "sin límite".
+        sw.connect('toggled', (_i, on) => {
+            if (on !== (this._ext.quiet?.state?.reason === 'manual'))
+                this._ext.quiet?.set(on ? 'on' : 'off');
+        });
         this.menu.addMenuItem(sw);
         const row = staticItem();
         row.add_style_class_name('kaito-dnd-row');
@@ -546,8 +720,48 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     }
 
     syncShortcutLabel() {
-        const [accel] = this._ext.getSettings().get_strv(SHORTCUT_KEY);
+        const settings = this._ext.getSettings();
+        const [accel] = settings.get_strv(SHORTCUT_KEY);
         this._shortcutLabel.set_text(prettyAccel(accel));
+        const kb = settings.settings_schema.has_key(KANBAN_KEY) ? settings.get_strv(KANBAN_KEY)[0] : '';
+        this._kanbanLabel?.set_text(prettyAccel(kb));
+    }
+
+    /** Tablero y avisos opcionales: menú, cabecera "Tareas", campana y atajo según Ajustes. */
+    _syncFeatures() {
+        const kanban = this._cfg.kanbanEnabled, inbox = this._cfg.inboxEnabled;
+        this._kanbanItem.visible = kanban;
+        this._inboxItem.visible = inbox;
+        this._bell.btn.visible = inbox;
+        const title = kanban ? 'Tareas' : 'Pendientes';
+        this._headerTitles?.todos?.set_text(title);
+        this._cardTitles?.todos?.set_text(title);
+        for (const e of this._todoEntries ?? [])
+            e.hint_text = kanban ? 'Añadir tarea y pulsar Enter' : 'Añadir pendiente y pulsar Enter';
+        this._ext.syncKanbanKey?.(kanban);
+        if (!kanban)
+            this._ext.kanban?.close();
+        if (!inbox)
+            this._ext.inbox?.close();
+        if (this._features !== `${kanban}|${inbox}`) {
+            this._features = `${kanban}|${inbox}`;
+            this._loadInboxStats();
+        }
+    }
+
+    /** Contadores de la campana (no leídos, "te necesita" sin resolver) desde inbox.json. */
+    _loadInboxStats() {
+        let list = [];
+        if (this._cfg.inboxEnabled) {
+            try {
+                list = readInbox();
+            } catch (e) {
+                console.warn(`kaito: inbox.json: ${e.message}`);
+            }
+        }
+        this._inboxStats = {unread: unreadCount(list), needs: pendingNeeds(list)};
+        if (this._inboxItem)
+            this._inboxItem.label.text = this._inboxStats.unread ? `Avisos (${this._inboxStats.unread})` : 'Avisos';
     }
 
     _saveTodos(todos) {
@@ -603,6 +817,13 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const now = new Set(agents.filter(a => a.state === 'needs').map(a => a.id));
         const prev = this._needsIds;
         this._needsIds = now;
+        // Panel de avisos: lo que ya no espera (contestado aquí o en la terminal) queda resuelto.
+        if (this._cfg.inboxEnabled && prev) {
+            for (const id of prev) {
+                if (!now.has(id))
+                    this._ext.inboxResolveNeeds(id, 'Ya no espera respuesta');
+            }
+        }
         // Ya no te necesita (respondido aquí o en la terminal): fuera su notificación.
         for (const [id, n] of this._needNotes) {
             if (!now.has(id)) {
@@ -615,6 +836,17 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const fresh = agents.filter(a => now.has(a.id) && !prev.has(a.id));
         if (!fresh.length)
             return;
+        if (this._cfg.inboxEnabled) {
+            // Siempre al panel; interrumpe también con No molestar manual, no fuera de horario.
+            for (const a of fresh)
+                this._ext.inboxAdd(this._needsItem(a));
+            if (inboxRoute('needs', this._ext.quiet?.state) !== 'interrupt')
+                return;
+            this._pulse();
+            if (this._cfg.notifyNeeds)
+                this._notifyNeeds(fresh);
+            return;
+        }
         if (this._ext.quiet?.quiet) {
             if (this._cfg.notifyNeeds) {
                 for (const a of fresh)
@@ -625,6 +857,22 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._pulse();
         if (!this._cfg.notifyNeeds)
             return;
+        this._notifyNeeds(fresh);
+    }
+
+    /** Aviso del panel para un agente que te necesita. */
+    _needsItem(a) {
+        const h = a.hook ?? {};
+        return {
+            id: `needs:${a.id}:${h.ts ?? Math.floor(Date.now() / 1000)}`, kind: 'needs', agentId: a.id,
+            provider: a.provider ?? 'claude', repo: a.cwd ?? null,
+            title: h.kind === 'permission' ? 'Te pide permiso' : 'Te necesita',
+            body: a.message ?? 'Te necesita', cmd: h.detail ? `${h.tool ? `${h.tool}: ` : ''}${h.detail}` : h.tool ?? null,
+            actions: Number.isInteger(a.pid) ? [{label: 'Ir al agente', action: {type: 'agent', id: a.id}}] : [],
+        };
+    }
+
+    _notifyNeeds(fresh) {
         for (const a of fresh) {
             // Si ya estás mirando su terminal, el diálogo lo tienes delante.
             if (this._agentFocused(a))
@@ -718,10 +966,21 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         } catch (e) {
             console.warn(`kaito: finished.json: ${e.message}`);
         }
-        const issue = this._jira.issues.find(i => i.key === a.ticket);
-        const jira = this._cfg.jiraEnabled; // sin Jira: tarjeta con lo de git, sin mover el ticket
+        const local = this._localTask(a.ticket); // tarea K-<n> del tablero: nada de Jira
+        const issue = local ? null : this._jira.issues.find(i => i.key === a.ticket);
+        const jira = this._cfg.jiraEnabled && !local; // sin Jira: tarjeta con lo de git, sin mover el ticket
         let moved = null, reason = null;
-        if (!jira) {
+        if (local) {
+            try {
+                const t = patchBoardTask(a.ticket, x => (todoState(x) === 'done' || todoState(x) === 'review' ? x : withState(x, 'review')));
+                moved = t ? STATE_NAMES[todoState(t)] : null;
+                reason = t ? null : 'la tarea ya no existe en el tablero';
+            } catch (e) {
+                reason = e.message;
+                console.warn(`kaito: tablero ${a.ticket}: ${e.message}`);
+            }
+            this._ext.kanban?.refresh();
+        } else if (!jira) {
             // nada que mover
         } else if (issue && REVIEW_RE.test(issue.status)) {
             reason = `ya estaba en ${issue.status}`;
@@ -746,7 +1005,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         if (rm > 0) {
             try {
                 remindAt = new Date(Date.now() + rm * 60000);
-                addReminder(reviewReminderText(a.ticket, issue?.summary ?? ''), remindAt);
+                addReminder(reviewReminderText(a.ticket, local?.text ?? issue?.summary ?? ''), remindAt);
             } catch (e) {
                 remindAt = null;
                 console.warn(`kaito: recordatorio de revisión: ${e.message}`);
@@ -755,23 +1014,50 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._ext.showFinished({
             id: key,
             agentId: a.id,
+            provider: a.provider ?? 'claude',
+            repo: a.cwd ?? null,
+            ticket: a.ticket,
             title: `${a.ticket} listo`,
             meta: `${a.cwd ?? '?'}${work.repo !== a.cwdPath ? ` · en ${GLib.path_get_basename(work.repo)}` : ''} · ${mins} min`,
             lines: finishLines({work, moved, reason, lastText: a.lastText, remindAt}),
             prUrl: work.pushed ? prUrl(work.remote, work.branch) : null,
             onFocus: Number.isInteger(a.pid) ? () => this.focusAgent(a) : null,
-            onSchedule: jira ? () => this._ext.openTaskCapture(REVIEW_PREFILL(a.ticket)) : null,
+            onSchedule: jira || local ? () => this._ext.openTaskCapture(REVIEW_PREFILL(a.ticket)) : null,
         });
         if (moved)
             this._refresh();
     }
 
+    /** Tarea K-<n> del tablero con esa clave (o null: entonces es un ticket de Jira). */
+    _localTask(key) {
+        if (!isLocalKey(key))
+            return null;
+        try {
+            return readTodos().find(t => t?.id === key) ?? null;
+        } catch (_e) {
+            return null;
+        }
+    }
+
     async _notifyDone(a, mins) {
         const title = `${a.cwd ?? '?'} terminó · ${mins} min`;
-        if (this._ext.quiet?.defer({key: `done:${a.id}`, text: title, action: {type: 'agent', id: a.id}}))
+        const jiraTicket = a.ticket && this._cfg.jiraEnabled && !this._localTask(a.ticket);
+        if (this._cfg.inboxEnabled) {
+            const items = [{label: 'Ir al agente', action: {type: 'agent', id: a.id}}];
+            if (jiraTicket)
+                items.push({label: 'Comentar en Jira', action: {type: 'comment', ticket: a.ticket, cwdPath: a.cwdPath ?? null, cwd: a.cwd ?? null}});
+            this._ext.inboxAdd({
+                id: `done:${a.id}:${Math.floor(Date.now() / 60000)}`, kind: 'done', agentId: a.id,
+                provider: a.provider ?? 'claude', repo: a.cwd ?? null, title: `Terminó · ${mins} min`,
+                body: firstLine(a.lastText) || DONE_MSG, actions: items,
+            });
+            if (inboxRoute('done', this._ext.quiet?.state) !== 'brief')
+                return;
+        } else if (this._ext.quiet?.defer({key: `done:${a.id}`, text: title, action: {type: 'agent', id: a.id}})) {
             return;
+        }
         const actions = [['Ir al agente', () => this.focusAgent(a)]];
-        if (a.ticket && this._cfg.jiraEnabled) {
+        if (jiraTicket) {
             actions.push(['Comentar en Jira', () => this._ext.openComment(a, this._issueSummary(a.ticket))]);
             try {
                 const t = pickTransition(await fetchTransitions(this._session, a.ticket), 'review');
@@ -821,19 +1107,43 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         step(0);
     }
 
-    /** Lee el uso de Claude (statusLine) y Codex (rollouts) y calcula lo que se pinta. */
+    /**
+     * Lee el uso de Claude (statusLine) y Codex (rollouts) y monta las filas de anillos: solo proveedores
+     * activados en Ajustes; Gemini y OpenCode (sin límites legibles) solo si están instalados.
+     */
     _loadUsage() {
         this._usage = {claude: null, codex: null};
+        this._usageRows = [];
         if (!this._cfg.showUsage)
             return;
         const now = Date.now() / 1000;
+        const enabled = this._cfg.agentProviders ?? {};
         for (const [k, read] of [['claude', readClaudeUsage], ['codex', readCodexUsage]]) {
+            if (enabled[k] === false)
+                continue;
             try {
                 this._usage[k] = usageView(read(), now);
             } catch (e) {
                 console.warn(`kaito: uso de ${k}: ${e.message}`);
             }
         }
+        let installed = {}, opencode = null;
+        try {
+            installed = this._usageInstalled();
+            if (installed.opencode && enabled.opencode !== false)
+                opencode = readOpencodeProvider();
+        } catch (e) {
+            console.warn(`kaito: proveedores para el uso: ${e.message}`);
+        }
+        this._usageRows = usageRows({views: this._usage, enabled, installed, opencode}, now);
+    }
+
+    /** {gemini, opencode}: instalados (la detección de proveedores tiene su propia caché). */
+    _usageInstalled() {
+        const out = {};
+        for (const p of installedProviders())
+            out[p.id] = p.installed;
+        return out;
     }
 
     _refreshUsage() {
@@ -842,29 +1152,33 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._updateLabel();
     }
 
+    /** Una fila por proveedor: insignia, anillos de 5 h y semana con su porcentaje y una nota a la derecha. */
     _usageSpecs() {
-        const specs = [];
-        for (const [k, name] of [['claude', 'Claude'], ['codex', 'Codex']]) {
-            const u = this._usage[k];
-            if (!u)
-                continue;
-            const col = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'kaito-usage'});
-            const top = new St.BoxLayout({x_expand: true});
-            top.add_child(mkLabel(name, 'kaito-usage-name'));
-            top.add_child(spacer());
-            if (u.age)
-                top.add_child(mkLabel(u.age, 'kaito-muted kaito-usage-age'));
-            col.add_child(top);
-            for (const w of [u.five, u.week]) {
-                if (!w)
+        const specs = (this._usageRows ?? []).map(row => {
+            const box = new St.BoxLayout({style_class: 'kaito-usage-row', x_expand: true, accessible_name: row.tooltip});
+            const badge = providerBadge(row);
+            box.add_child(badge);
+            for (const r of row.rings) {
+                if (!r)
                     continue;
-                col.add_child(mkLabel(w.label, 'kaito-usage-label'));
-                const bar = usageBar();
-                bar.set(w.pct, w.color);
-                col.add_child(bar.track);
+                const cell = new St.BoxLayout({style_class: 'kaito-usage-cell', y_align: Clutter.ActorAlign.CENTER,
+                    accessible_name: `${r.kind === 'five' ? '5 h' : 'semana'} ${r.text}`});
+                const ring = usageRing();
+                ring.set(r);
+                cell.add_child(ring.actor);
+                cell.add_child(mkLabel(r.text, 'kaito-usage-pct'));
+                cell.opacity = r.dim || row.dim ? DIM_OPACITY : 255;
+                box.add_child(cell);
             }
-            specs.push({actor: col});
-        }
+            box.add_child(spacer());
+            const note = mkLabel(row.note, row.rings.length ? 'kaito-muted kaito-usage-note' : 'kaito-muted kaito-usage-note kaito-usage-nolimit');
+            if (row.dim)
+                note.opacity = DIM_OPACITY;
+            box.add_child(note);
+            // "Tooltip": al pasar por la insignia, la nota dice proveedor y reinicios.
+            badge.connect('notify::hover', () => note.set_text(badge.hover ? row.tooltip : row.note));
+            return {actor: box};
+        });
         this._counts.usage = specs.length;
         return specs;
     }
@@ -1019,6 +1333,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     }
 
     _todosSpecs() {
+        if (this._cfg.kanbanEnabled)
+            return this._boardSpecs();
         const todos = readJson(TODOS_PATH, []);
         const pending = todos.filter(t => !t.done);
         this._counts.todos = pending.length;
@@ -1035,6 +1351,36 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                     this._saveTodos(todos);
                 },
             };
+        });
+    }
+
+    /** Con el tablero: "Tareas" abiertas (Haciendo, En revisión, Por hacer) con prioridad y estado. */
+    _boardSpecs() {
+        let todos = [];
+        try {
+            todos = readBoard();
+        } catch (e) {
+            console.warn(`kaito: tablero: ${e.message}`);
+        }
+        const order = {doing: 0, review: 1, todo: 2};
+        const prio = {highest: 0, high: 1, medium: 2, low: 3};
+        const open = todos.filter(t => todoState(t) !== 'done')
+            .sort((a, b) => order[todoState(a)] - order[todoState(b)] || (prio[a.priority] ?? 2) - (prio[b.priority] ?? 2));
+        this._counts.todos = open.length;
+        if (!open.length)
+            return [this._emptySpec('Nada pendiente')];
+        return open.map(t => {
+            const row = content();
+            row.add_child(new St.Icon({
+                gicon: this._icons[`prio-${t.priority}`] ?? this._icons['prio-medium'], icon_size: 14, style_class: 'kaito-prio',
+                y_align: Clutter.ActorAlign.CENTER, accessible_name: PRIORITY_NAMES[t.priority] ?? '',
+            }));
+            row.add_child(ellipsized(mkLabel(t.text, 'kaito-todo-text')));
+            if (this._byTicket[t.id])
+                row.add_child(pulsing(dot(C.live)));
+            const st = todoState(t);
+            row.add_child(mkLabel(STATE_NAMES[st], `kaito-pill ${STATE_PILL[st]}`));
+            return {actor: row, activate: () => this._ext.openKanban(t.id)};
         });
     }
 
@@ -1878,13 +2224,13 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._cardHeaders = {};
         for (const [id, title] of SECTIONS) {
             const h = this._headerRow(title);
+            (this._cardTitles ??= {})[id] = h.title;
             const row = new St.BoxLayout({style_class: 'kaito-row kaito-header', x_expand: true});
             row.add_child(h.title);
             row.add_child(h.spacer);
             row.add_child(h.count);
             this._cardCounters[id] = h.count;
             this._cardHeaders[id] = row;
-            h.count.visible = id !== 'usage';
             body.add_child(row);
             this._cardSec[id] = new St.BoxLayout({vertical: true, x_expand: true});
             if (id === 'jira') {
@@ -1927,6 +2273,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._cardSec = null;
         this._cardCounters = null;
         this._cardHeaders = null;
+        this._cardTitles = null;
         this._cardScroll = null;
         this._cardJiraTabs = null;
         this._cardJiraScroll = null;
@@ -1978,24 +2325,34 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             seg.opacity = n ? 255 : 115;
         }
         // Cabecera de Jira: la vista activa. El panel sigue contando "Mías".
-        const shown = {...c, jira: this._jiraView === 'mine' ? c.jira : this._views[this._jiraView]?.issues.length ?? 0};
+        const shown = {...c, usage: this._usageRows?.some(r => r.rings.some(Boolean)) ? USAGE_COLUMNS : '', jira: this._jiraView === 'mine' ? c.jira : this._views[this._jiraView]?.issues.length ?? 0};
         for (const [id] of SECTIONS) {
             this._counters[id]?.set_text(String(shown[id]));
             this._cardCounters?.[id]?.set_text(String(shown[id]));
         }
-        const five = this._usage.claude?.five ?? null;
-        this._mini.track.visible = !!five;
-        if (five)
-            this._mini.set(five.pct, five.color);
-        this._mini.track.accessible_name = five ? `Claude 5 h ${Math.round(five.pct)} %` : '';
+        const ib = this._cfg.inboxEnabled ? this._inboxStats ?? {unread: 0, needs: false} : null;
+        if (ib) {
+            this._bell.num.set_text(String(ib.unread));
+            this._bell.dot.visible = ib.needs;
+            this._bell.btn.opacity = ib.unread || ib.needs ? 255 : 115;
+            this._bell.btn.accessible_name = `Avisos: ${ib.unread} sin leer`;
+        }
+        const five = panelRing(this._usage, this._cfg.usagePanelProvider);
+        this._mini.actor.visible = !!five;
+        if (five) {
+            this._mini.set(five);
+            this._mini.actor.opacity = five.dim ? DIM_OPACITY : 255;
+        }
+        this._mini.actor.accessible_name = five?.label ?? '';
         if (needs)
             this.add_style_class_name('kaito-attention');
         else
             this.remove_style_class_name('kaito-attention');
         this.accessible_name = `Kaito: ${c.agents} agentes`
             + (needs ? `, ${needs} ${needs === 1 ? 'te necesita' : 'te necesitan'}` : '')
-            + (this._cfg.jiraEnabled ? `, ${c.jira} tickets` : '') + `, ${c.todos} pendientes`
-            + (five ? `, Claude 5 h ${Math.round(five.pct)} %` : '')
+            + (this._cfg.jiraEnabled ? `, ${c.jira} tickets` : '') + `, ${c.todos} ${this._cfg.kanbanEnabled ? 'tareas' : 'pendientes'}`
+            + (ib?.unread ? `, ${ib.unread} avisos` : '')
+            + (five ? `, ${five.label}` : '')
             + (this._ext.quiet?.quiet ? ', no molestar' : '')
             + (this._updatePending ? ', actualización disponible' : '');
     }
@@ -2007,6 +2364,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._loadAgents();
         this._loadUsage();
         this._syncPinned();
+        this._syncFeatures();
         const vsig = JSON.stringify(visibleViews(this._cfg));
         if (vsig !== this._viewsSig) {
             this._viewsSig = vsig;
@@ -2199,11 +2557,15 @@ export default class KaitoMain {
             this._commentSession ??= new Soup.Session({timeout: 20});
             return this._commentSession;
         });
+        // Opcionales (kanbanEnabled / inboxEnabled): se crean siempre, solo se abren si están activados.
+        this.kanban = new KanbanBoard(this._kanbanHooks());
+        this.inbox = new InboxPanel(this._inboxHooks());
         this._indicator = new (indicatorClass(this.loadId))(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         // Tras crear el indicador: así, al vencerse algo, la lista del menú ya está montada.
         this._reminders = new ReminderManager(() => this._indicator?.refreshLocal(), {
             quiet: () => this.quiet && {quiet: this.quiet.quiet, holdReminders: this.quiet.holdReminders},
+            onDue: list => this._remindersDue(list),
         });
 
         this._taskTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TASK_TICK_S, () => {
@@ -2220,6 +2582,276 @@ export default class KaitoMain {
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this.openCapture());
         this._shortcutId = this._settings.connect(`changed::${SHORTCUT_KEY}`,
             () => this._indicator?.syncShortcutLabel());
+        this._kanbanKeyId = this._settings.settings_schema.has_key(KANBAN_KEY)
+            ? this._settings.connect(`changed::${KANBAN_KEY}`, () => this._indicator?.syncShortcutLabel()) : 0;
+        this._indicator.syncShortcutLabel();
+    }
+
+    // --- Tablero de tareas (opcional) ---
+
+    /** Atajo global del tablero: solo con el tablero activado (y si el esquema ya tiene la clave). */
+    syncKanbanKey(on) {
+        if (on === !!this._kanbanBound || !this._settings)
+            return;
+        if (on) {
+            if (!this._settings.settings_schema.has_key(KANBAN_KEY)) {
+                if (!this._kanbanKeyWarned)
+                    console.warn(`kaito: el esquema instalado no tiene ${KANBAN_KEY}: cierra sesión y vuelve a entrar para el atajo del tablero`);
+                this._kanbanKeyWarned = true;
+                return;
+            }
+            Main.wm.addKeybinding(KANBAN_KEY, this._settings, Meta.KeyBindingFlags.NONE,
+                Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW | Shell.ActionMode.POPUP, () => this.toggleKanban());
+            this._kanbanBound = true;
+        } else {
+            Main.wm.removeKeybinding(KANBAN_KEY);
+            this._kanbanBound = false;
+        }
+    }
+
+    openKanban(taskId = null) {
+        if (!readConfig().kanbanEnabled)
+            return;
+        if (!this.kanban.isOpen)
+            this._closeModals();
+        this.kanban.open(taskId);
+    }
+
+    toggleKanban() {
+        if (this.kanban?.isOpen)
+            this.kanban.close();
+        else
+            this.openKanban();
+    }
+
+    _repoList(task) {
+        const ind = this._indicator;
+        let repos = [];
+        try {
+            repos = collectRepos();
+            const now = GLib.get_monotonic_time() / 1e6;
+            if (ind && (!ind._scan || now - ind._scan.t > 300))
+                ind._scan = {t: now, list: scanRepos(ind._cfg.repoRoots)};
+            const seen = new Set(repos.map(r => r.path));
+            repos = [...repos, ...(ind?._scan?.list ?? []).filter(r => !seen.has(r.path))];
+        } catch (e) {
+            console.warn(`kaito: repos: ${e.message}`);
+        }
+        const issue = {key: task?.id ?? '', summary: task?.text ?? '', description: task?.description ?? ''};
+        return rankRepos(issue, repos, ind?._cfg ?? readConfig(), p => GLib.file_test(p, GLib.FileTest.IS_DIR));
+    }
+
+    _kanbanHooks() {
+        return {
+            agentFor: id => this._indicator?._byTicket[id] ?? null,
+            repoCandidates: task => {
+                const list = this._repoList(task).map(r => r.path);
+                return task.repo && !list.includes(task.repo) ? [task.repo, ...list] : list;
+            },
+            allRepos: task => this._repoList(task),
+            chooseFolder: title => this._chooseFolder(title),
+            send: (task, repo) => this._sendTaskToClaude(task, repo),
+            scheduleReview: task => this.openTaskCapture(REVIEW_PREFILL(task.id)),
+            focusAgent: a => this._indicator?.focusAgent(a),
+            dueFor: task => {
+                const r = readReminders().filter(x => !x.done && String(x.text).includes(task.id))
+                    .sort((a, b) => new Date(a.due) - new Date(b.due))[0];
+                return r ? shortLabel(new Date(r.due), new Date()) : null;
+            },
+            changed: () => {
+                this._indicator?._renderSection('todos');
+                this._indicator?._updateLabel();
+            },
+        };
+    }
+
+    async _chooseFolder(title) {
+        try {
+            const proc = Gio.Subprocess.new(['zenity', '--file-selection', '--directory', `--title=${title}`],
+                Gio.SubprocessFlags.STDOUT_PIPE);
+            const [out] = await proc.communicate_utf8_async(null, null);
+            const dir = (out ?? '').trim();
+            return proc.get_successful() && dir.startsWith('/') && GLib.file_test(dir, GLib.FileTest.IS_DIR) ? dir : null;
+        } catch (e) {
+            console.warn(`kaito: selector de carpeta: ${e.message}`);
+            return null;
+        }
+    }
+
+    /** "Mandar a Claude" desde el tablero: mismo lanzamiento que un ticket, con el prompt de la tarea. */
+    _sendTaskToClaude(task, repo) {
+        const cfg = readConfig();
+        try {
+            const branch = `${task.id}-${taskSlug(task.text)}`;
+            sendIssueToClaude({
+                issue: {key: task.id, summary: task.text}, base: '', description: null, repo, terminal: cfg.terminal,
+                prompt: localTaskPrompt(task, repo, repoBranch(repo)),
+            });
+            patchBoardTask(task.id, x => ({...withState(x, todoState(x) === 'todo' ? 'doing' : todoState(x)), repo}));
+            Main.notify('Kaito', `${task.id} enviada a Claude en ${GLib.path_get_basename(repo)} · rama ${branch}`);
+        } catch (e) {
+            Main.notify('Kaito', `No se pudo mandar ${task.id} a Claude: ${e.message}`);
+        }
+        this.kanban?.refresh();
+        this._indicator?.refreshLocal();
+    }
+
+    // --- Panel de avisos (opcional) ---
+
+    openInbox() {
+        if (!readConfig().inboxEnabled)
+            return;
+        if (this.inbox.isOpen) {
+            this.inbox.close();
+            return;
+        }
+        this._closeModals();
+        this.inbox.open();
+    }
+
+    get _inboxOn() {
+        return this._indicator?._cfg.inboxEnabled ?? readConfig().inboxEnabled;
+    }
+
+    /** Guarda un aviso en el panel. once: no lo repite si ya está (recordatorios que se revisan cada 20 s). */
+    inboxAdd(item, once = false) {
+        try {
+            const list = readInbox();
+            if (once && list.some(x => x.id === item.id))
+                return;
+            writeInbox(inboxPush(list, item));
+        } catch (e) {
+            console.warn(`kaito: inbox.json: ${e.message}`);
+        }
+        this._indicator?._loadInboxStats();
+        this._indicator?._updateLabel();
+        this.inbox?.refresh();
+    }
+
+    /** El agente ya no te necesita: sus "te necesita" pendientes quedan resueltos con `text`. */
+    inboxResolveNeeds(agentId, text) {
+        try {
+            const list = readInbox();
+            let next = list;
+            for (const x of list) {
+                if (x.kind === 'needs' && x.agentId === agentId && !x.resolved)
+                    next = resolveItem(next, x.id, text);
+            }
+            if (next !== list)
+                writeInbox(next);
+        } catch (e) {
+            console.warn(`kaito: inbox.json: ${e.message}`);
+        }
+    }
+
+    _inboxHooks() {
+        return {
+            agent: id => this._indicator?._agents.find(a => a.id === id) ?? null,
+            decide: (agent, behavior) => {
+                if (!canDecide(agent))
+                    return 'La petición ya no espera respuesta: contesta en la terminal';
+                try {
+                    writeDecision(agent.id, agent.hook.request, behavior);
+                } catch (e) {
+                    return `No se pudo enviar: ${e.message}`;
+                }
+                this._indicator?.refreshLocal();
+                return true;
+            },
+            reply: (agent, text) => this.copyReplyTo(agent, text),
+            action: action => this._inboxAction(action),
+            quiet: () => this.quiet?.state ?? {quiet: false},
+            setDnd: mins => this.quiet?.setMinutes(mins),
+            dndOff: () => this.quiet?.set('off'),
+            changed: () => {
+                this._indicator?._loadInboxStats();
+                this._indicator?._updateLabel();
+            },
+        };
+    }
+
+    /**
+     * Texto libre para un agente: Claude Code no deja escribir en su sesión desde fuera, así que (como en
+     * el cuadro de respuesta) se copia al portapapeles y se enfoca su terminal.
+     */
+    copyReplyTo(agent, text) {
+        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+        this._indicator?.focusAgent(agent);
+        Main.notify('Kaito', 'Copiado. Pégalo con Ctrl+Shift+V en la terminal');
+    }
+
+    /** Acciones guardadas en un aviso del panel: {type: agent|url|review|task|taskComment|comment|update|reminder*}. */
+    _inboxAction(action) {
+        const ind = this._indicator;
+        switch (action?.type) {
+        case 'url':
+            try {
+                Gio.AppInfo.launch_default_for_uri(action.url, null);
+            } catch (e) {
+                console.warn(`kaito: no se pudo abrir ${action.url}: ${e.message}`);
+            }
+            break;
+        case 'review':
+            this.openTaskCapture(REVIEW_PREFILL(action.key));
+            break;
+        case 'board':
+            this.openKanban(action.id ?? null);
+            break;
+        case 'taskComment': {
+            const task = this._findTask(action.id);
+            if (task)
+                this.commentTask(task, readLastRun(task.id));
+            break;
+        }
+        case 'comment': {
+            const live = ind?._agents.find(a => a.ticket === action.ticket);
+            const cwdPath = action.cwdPath ?? null;
+            this.openComment(live ?? {ticket: action.ticket, cwdPath, cwd: action.cwd ?? '?', lastText: ''},
+                ind?._issueSummary(action.ticket) ?? '');
+            break;
+        }
+        case 'reminderDone':
+        case 'reminderSnooze':
+            try {
+                patchReminder(action.id, r => {
+                    if (action.type === 'reminderDone') {
+                        r.done = true;
+                    } else {
+                        r.due = new Date(Date.now() + SNOOZE_MS).toISOString();
+                        r.snoozes = (r.snoozes ?? 0) + 1;
+                    }
+                });
+            } catch (e) {
+                console.warn(`kaito: recordatorio: ${e.message}`);
+            }
+            this._reminders?.check();
+            ind?.refreshLocal();
+            break;
+        default:
+            this._queuedAction(action);
+        }
+    }
+
+    _findTask(id) {
+        try {
+            return readTasks().find(t => t.id === id) ?? null;
+        } catch (e) {
+            console.warn(`kaito: tareas: ${e.message}`);
+            return null;
+        }
+    }
+
+    /** Recordatorios vencidos (se muestren o los retenga No molestar): también al panel, una vez cada uno. */
+    _remindersDue(list) {
+        if (!this._inboxOn)
+            return;
+        for (const r of list) {
+            this.inboxAdd({
+                id: `rem:${r.id}:${r.due}`, kind: 'reminder', title: r.text, body: '',
+                actions: [{label: 'Posponer 10 min', action: {type: 'reminderSnooze', id: r.id}},
+                    {label: 'Hecho', action: {type: 'reminderDone', id: r.id}}],
+            }, true);
+        }
     }
 
     openCapture() {
@@ -2244,6 +2876,23 @@ export default class KaitoMain {
     _onTaskFinish(task, run) {
         this._indicator?._renderSection('tasks');
         this._indicator?._updateLabel();
+        if (this._inboxOn) {
+            const title = `Tarea «${task.name}» · ${run.ok ? 'terminada' : 'falló'}`;
+            const comment = task.key && readConfig().jiraEnabled;
+            this.inboxAdd({
+                id: `task:${task.id}:${run.finished ?? Date.now()}`, kind: 'task', repo: task.name, title,
+                body: run.summary ?? '', actions: [{label: 'Ver completo', action: {type: 'task', id: task.id}},
+                    ...comment ? [{label: 'Comentar en Jira', action: {type: 'taskComment', id: task.id}}] : []],
+            });
+            if (inboxRoute('task', this.quiet?.state) === 'brief') {
+                this._indicator?._notify(title, run.summary ?? '', {
+                    activate: () => this.openTaskResult(task, run),
+                    actions: [['Ver completo', () => this.openTaskResult(task, run)],
+                        ...comment ? [['Comentar en Jira', () => this.commentTask(task, run)]] : []],
+                });
+            }
+            return;
+        }
         if (this.quiet?.defer({key: `task:${task.id}`, text: `Tarea «${task.name}» · ${run.ok ? 'terminada' : 'falló'}`,
             action: {type: 'task', id: task.id}}))
             return;
@@ -2256,6 +2905,17 @@ export default class KaitoMain {
 
     /** Fin del silencio: una tarjeta "Mientras no estabas" con todo lo retenido. */
     _showQueued(items) {
+        if (this._inboxOn) { // con el panel no hay tarjeta "Mientras no estabas": todo queda en el panel
+            const LABEL = {agent: 'Ir al agente', task: 'Ver completo', update: 'Actualizar'};
+            const KIND = {needs: 'needs', done: 'done', fin: 'finished', task: 'task', update: 'update'};
+            for (const it of items) {
+                this.inboxAdd({
+                    id: `quiet:${it.key}`, kind: KIND[String(it.key).split(':')[0]] ?? 'done', title: it.text, ts: it.at,
+                    actions: it.action && LABEL[it.action.type] ? [{label: LABEL[it.action.type], action: it.action}] : [],
+                }, true);
+            }
+            return;
+        }
         this._reminders?.showQueued(items, it => this._queuedAction(it.action));
     }
 
@@ -2315,6 +2975,8 @@ export default class KaitoMain {
 
     _closeModals() {
         this._indicator?.menu.close();
+        this.kanban?.close();
+        this.inbox?.close();
         this._capture?.close();
         this._reply?.close();
         this._comment?.close();
@@ -2336,6 +2998,31 @@ export default class KaitoMain {
     }
 
     showFinished(info) {
+        if (this._inboxOn) {
+            const actions = [];
+            if (info.prUrl)
+                actions.push({label: 'Abrir PR', action: {type: 'url', url: info.prUrl}});
+            if (info.onFocus && info.agentId)
+                actions.push({label: 'Ir al agente', action: {type: 'agent', id: info.agentId}});
+            if (info.onSchedule && info.ticket)
+                actions.push({label: 'Revisar', action: {type: 'review', key: info.ticket}});
+            this.inboxAdd({
+                id: `fin:${info.id}`, kind: 'finished', agentId: info.agentId ?? null, provider: info.provider ?? null,
+                repo: info.repo ?? null, title: info.title, body: [info.meta, ...info.lines.map(l => l.text)].filter(Boolean).join('\n'),
+                actions,
+            });
+            if (inboxRoute('finished', this.quiet?.state) === 'brief') {
+                const cb = [];
+                if (info.prUrl)
+                    cb.push(['Abrir PR', () => this._inboxAction({type: 'url', url: info.prUrl})]);
+                if (info.onFocus)
+                    cb.push(['Ir al agente', info.onFocus]);
+                if (info.onSchedule)
+                    cb.push(['Programar revisión', info.onSchedule]);
+                this._indicator?._notify(info.title, info.lines.map(l => l.text).join('\n'), {activate: cb[0]?.[1] ?? null, actions: cb});
+            }
+            return;
+        }
         if (this.quiet?.defer({key: `fin:${info.id}`, text: `${info.title} · ${info.meta}`,
             action: info.agentId ? {type: 'agent', id: info.agentId} : null}))
             return;
@@ -2354,6 +3041,15 @@ export default class KaitoMain {
         this._taskResult = null;
         Main.wm.removeKeybinding(SHORTCUT_KEY);
         this._settings?.disconnect(this._shortcutId);
+        if (this._kanbanKeyId)
+            this._settings?.disconnect(this._kanbanKeyId);
+        if (this._kanbanBound)
+            Main.wm.removeKeybinding(KANBAN_KEY);
+        this._kanbanBound = false;
+        this.kanban?.destroy();
+        this.kanban = null;
+        this.inbox?.destroy();
+        this.inbox = null;
         this._capture?.destroy();
         this._capture = null;
         this._reply?.destroy();

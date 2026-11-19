@@ -105,6 +105,60 @@ printf '[tui]\nnotify = 1\n' > "$CFG"
 "$REPO/install.sh" --codex-notify-only --yes-codex >/dev/null 2>&1
 check "notify dentro de tabla no cuenta" bash -c 'head -n1 "$1" | grep -q "^notify = \[\"python3\""' _ "$CFG"
 
+# ------------------------------------------- merge-settings.py --statusline-only
+echo "merge-settings.py --statusline-only"
+M="$REPO/hooks/merge-settings.py"; SJ="$T/claude-settings.json"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/otro/hook.sh"}]}]}, "model": "x"}\n' > "$SJ"
+cp "$SJ" "$T/sj.orig"
+check "status: sin statusLine" grep -q '"state": "none"' <<<"$(python3 "$M" status --settings "$SJ")"
+python3 "$M" install --statusline-only --settings "$SJ" >/dev/null; check "sin --apply no escribe" cmp -s "$SJ" "$T/sj.orig"
+python3 "$M" install --statusline-only --apply --settings "$SJ" >/dev/null; RC=$?
+check "install --statusline-only --apply: rc 0" test "$RC" = 0
+python3 - "$SJ" "$REPO" <<'PY' && pass "solo añade la statusLine (hooks y resto intactos)" || fail "statusline-only install"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["statusLine"]["command"].strip("'") == sys.argv[2] + "/hooks/kaito-statusline.py", d
+assert d["hooks"] == {"Stop": [{"hooks": [{"type": "command", "command": "/otro/hook.sh"}]}]} and d["model"] == "x", d
+PY
+check "copia de seguridad hecha" bash -c 'ls "$1".bak-kaito-* >/dev/null 2>&1' _ "$SJ"
+check "status: kaito" grep -q '"state": "kaito"' <<<"$(python3 "$M" status --settings "$SJ")"
+python3 "$M" install --statusline-only --apply --settings "$SJ" >/dev/null; RC=$?
+check "segunda vez: sin cambios (rc 10)" test "$RC" = 10
+python3 "$M" uninstall --statusline-only --apply --settings "$SJ" >/dev/null
+python3 - "$SJ" <<'PY' && pass "uninstall --statusline-only: quita la statusLine y deja los hooks" || fail "statusline-only uninstall"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert "statusLine" not in d and d["hooks"]["Stop"][0]["hooks"][0]["command"] == "/otro/hook.sh", d
+PY
+printf '{"statusLine": {"type": "command", "command": "~/mi-barra.sh"}}\n' > "$SJ"; cp "$SJ" "$T/sj.other"
+check "status: otra barra" grep -q '"state": "other".*mi-barra' <<<"$(python3 "$M" status --settings "$SJ")"
+OUT="$(python3 "$M" install --statusline-only --apply --settings "$SJ" 2>&1)"; RC=$?
+check "otra statusLine: no se sobrescribe (rc 10)" test "$RC" = 10
+check "otra statusLine: fichero intacto" cmp -s "$SJ" "$T/sj.other"
+python3 "$M" uninstall --statusline-only --apply --settings "$SJ" >/dev/null
+check "uninstall no quita una statusLine ajena" cmp -s "$SJ" "$T/sj.other"
+
+# ---------------------------------------------------- doctor: opcionales
+echo "doctor: tablero y avisos"
+D="$("$REPO/bin/kaito" doctor 2>&1)"
+check "doctor: tablero desactivado por defecto" grep -q 'tablero de tareas: desactivado' <<<"$D"
+check "doctor: avisos desactivado por defecto" grep -q 'panel de avisos: desactivado' <<<"$D"
+mkdir -p "$XDG_CONFIG_HOME/kaito"; echo '{"kanbanEnabled": true, "inboxEnabled": true}' > "$XDG_CONFIG_HOME/kaito/config.json"
+D="$("$REPO/bin/kaito" doctor 2>&1)"
+check "doctor: tablero activado" grep -q 'tablero de tareas: activado' <<<"$D"
+check "doctor: avisos activado" grep -q 'panel de avisos: activado' <<<"$D"
+
+# ------------------------------------------------------------- kaito kanban
+echo "kaito kanban"
+rm -f "$XDG_CACHE_HOME/kaito/open-kanban"
+OUT="$("$REPO/bin/kaito" kanban 2>&1)"; RC=$?
+check "kanban: rc 0" test "$RC" = 0
+check "kanban: toca open-kanban" test -f "$XDG_CACHE_HOME/kaito/open-kanban"
+echo '{}' > "$XDG_CONFIG_HOME/kaito/config.json"
+OUT="$("$REPO/bin/kaito" kanban 2>&1)"
+check "kanban desactivado: avisa" grep -q 'desactivado' <<<"$OUT"
+rm -f "$XDG_CONFIG_HOME/kaito/config.json"
+
 # ------------------------------------------------------------------- hook
 echo "kaito-codex-notify.py"
 check "selftest del hook" bash -c 'python3 "$1" --selftest 2>/dev/null | grep -q "selftest OK"' _ "$REPO/hooks/kaito-codex-notify.py"

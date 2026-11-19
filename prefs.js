@@ -1,4 +1,5 @@
 import Adw from 'gi://Adw';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import Soup from 'gi://Soup?version=3.0';
@@ -13,8 +14,12 @@ import {
 } from './common.js';
 import {LEVEL_TEXT} from './providers.js';
 import {parseHHMM, fmtHHMM} from './quiet.js';
+import {PANEL_RING_PROVIDERS, PANEL_RING_LABELS} from './usage.js';
+
+Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 
 const DAY_NAMES = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+const STATUS_INFO = 'Claude Code pasa tu uso (5 h y semanal) a su barra de estado; Kaito la usa para los anillos de uso.';
 const DAY_FULL = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
 
 const TERMINAL_LABELS = ['Automático (recomendado)', 'Ptyxis', 'GNOME Terminal', 'Consola (kgx)', 'Warp (pestaña)', 'Warp (ventana)'];
@@ -74,6 +79,102 @@ function entryRow(title, key, cfg) {
 }
 
 export default class KaitoPreferences extends ExtensionPreferences {
+    /** Atajo del tablero (clave nueva del esquema: sin volver a entrar puede no existir). */
+    _kanbanShortcutRow() {
+        const settings = this.getSettings();
+        if (!settings.settings_schema.has_key('kanban-shortcut'))
+            return new Adw.ActionRow({title: 'Atajo del tablero', subtitle: 'Cierra sesión y vuelve a entrar una vez para poder cambiarlo (Super+K por defecto)'});
+        const row = new Adw.EntryRow({
+            title: 'Atajo del tablero (p. ej. <Super>k)', use_markup: false,
+            text: settings.get_strv('kanban-shortcut')[0] ?? '', show_apply_button: true,
+        });
+        row.connect('apply', () => {
+            const accel = row.text.trim();
+            const [ok, key] = Gtk.accelerator_parse(accel);
+            if (!accel || !ok || !key) {
+                row.add_css_class('error');
+                return;
+            }
+            row.remove_css_class('error');
+            settings.set_strv('kanban-shortcut', [accel]);
+        });
+        return row;
+    }
+
+    /**
+     * "Datos de uso de Claude": ¿la statusLine de ~/.claude/settings.json es hooks/kaito-statusline.py?
+     * Instalar/Quitar con hooks/merge-settings.py --statusline-only (argv, sin shell; hace copia de seguridad
+     * y nunca sustituye otra statusLine distinta).
+     */
+    _statusLineRow() {
+        const row = new Adw.ActionRow({title: 'Datos de uso de Claude', subtitle: STATUS_INFO});
+        row.subtitle_lines = 4;
+        const btn = new Gtk.Button({label: 'Instalar', valign: Gtk.Align.CENTER, sensitive: false});
+        row.add_suffix(btn);
+        const script = GLib.build_filenamev([this.path, 'hooks', 'merge-settings.py']);
+        const python = GLib.find_program_in_path('python3');
+        let state = null;
+        const run = async args => {
+            const proc = Gio.Subprocess.new([python, script, ...args],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE);
+            const [out] = await proc.communicate_utf8_async(null, null);
+            return {code: proc.get_exit_status(), out: out ?? ''};
+        };
+        const refresh = async (note = null) => {
+            if (!python || !GLib.file_test(script, GLib.FileTest.EXISTS)) {
+                row.subtitle = `${STATUS_INFO}\nNo se encuentra python3 o ${script}`;
+                btn.sensitive = false;
+                return;
+            }
+            try {
+                const r = await run(['status']);
+                const st = JSON.parse(r.out.trim().split('\n').pop());
+                state = st.state;
+                if (st.state === 'other') {
+                    btn.label = 'Instalar';
+                    btn.sensitive = false;
+                    row.subtitle = `${STATUS_INFO}\nYa tienes otra barra de estado: ${GLib.markup_escape_text(st.command ?? '?', -1)}`;
+                    return;
+                }
+                const installed = st.state === 'kaito';
+                btn.label = installed ? 'Quitar' : 'Instalar';
+                btn.sensitive = true;
+                row.subtitle = `${STATUS_INFO}\n${note ?? (installed ? 'Instalada' : st.state === 'kaito-other-path' ? 'Instalada desde otra carpeta de Kaito: pulsa Instalar para actualizar la ruta' : 'No instalada')}`;
+            } catch (e) {
+                btn.sensitive = false;
+                row.subtitle = `${STATUS_INFO}\nNo se pudo leer ~/.claude/settings.json: ${GLib.markup_escape_text(e.message, -1)}`;
+            }
+        };
+        btn.connect('clicked', async () => {
+            const remove = state === 'kaito';
+            btn.sensitive = false;
+            try {
+                const r = await run([remove ? 'uninstall' : 'install', '--statusline-only', '--apply']);
+                if (r.code !== 0 && r.code !== 10)
+                    throw new Error(r.out.trim().split('\n').pop() || `código ${r.code}`);
+                await refresh(remove ? 'Quitada.' : 'Instalada. Se verá al abrir o usar Claude Code.');
+            } catch (e) {
+                await refresh(`No se pudo: ${GLib.markup_escape_text(e.message, -1)}`);
+            }
+        });
+        refresh().catch(e => console.error(`kaito: statusLine: ${e.message}`));
+        return row;
+    }
+
+    /** Opcionales: tablero de tareas y panel de avisos (apagados por defecto). */
+    _optionalGroup(page, cfg) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Tablero y avisos',
+            description: 'Opcionales. Desactivados, Kaito funciona exactamente como antes',
+        });
+        page.add(group);
+        group.add(switchRow('Tablero de tareas',
+            'Convierte Pendientes en tareas con estado y prioridad', 'kanbanEnabled', cfg));
+        group.add(this._kanbanShortcutRow());
+        group.add(switchRow('Panel de avisos',
+            'Un solo sitio para todos los avisos, con respuesta', 'inboxEnabled', cfg));
+    }
+
     /** Atajo de captura rápida: acepta un acelerador GTK, p. ej. <Control><Alt>space. */
     _shortcutRow() {
         const settings = this.getSettings();
@@ -373,7 +474,23 @@ export default class KaitoPreferences extends ExtensionPreferences {
         general.add(switchRow('Mostrar siempre desplegado',
             'Panel fijo arriba a la derecha, por encima de las ventanas', 'pinned', cfg));
         general.add(switchRow('Mostrar uso de Claude y Codex',
-            'Barras de los límites de 5 h y semanales. Claude necesita hooks/kaito-statusline.py (ver README); Codex se lee de ~/.codex', 'showUsage', cfg));
+            'Anillos de los límites de 5 h y semanales. Claude necesita hooks/kaito-statusline.py (ver README); Codex se lee de ~/.codex', 'showUsage', cfg));
+        general.add(this._statusLineRow());
+        const ringIdx = Math.max(0, PANEL_RING_PROVIDERS.indexOf(cfg.usagePanelProvider));
+        const ringRow = new Adw.ComboRow({
+            title: 'Anillo en la barra superior',
+            subtitle: 'Uso de 5 h junto a los contadores',
+            model: Gtk.StringList.new(PANEL_RING_LABELS),
+            selected: ringIdx,
+        });
+        ringRow.connect('notify::selected', () => {
+            try {
+                updateConfig({usagePanelProvider: PANEL_RING_PROVIDERS[ringRow.selected]});
+            } catch (e) {
+                console.error(`kaito: no se pudo guardar usagePanelProvider: ${e.message}`);
+            }
+        });
+        general.add(ringRow);
         general.add(switchRow('Resumen al empezar el día',
             'Primera vez a partir de las 06:00: tickets en curso, recordatorios de hoy y agentes parados', 'dailySummary', cfg));
         general.add(this._shortcutRow());
@@ -396,6 +513,8 @@ export default class KaitoPreferences extends ExtensionPreferences {
         general.add(term);
         general.add(switchRow('Buscar actualizaciones',
             'Cada 6 h mira si hay una versión nueva y la ofrece arriba del menú (solo si Kaito se instaló con git)', 'checkUpdates', cfg));
+
+        this._optionalGroup(page, cfg);
 
         // --- Tareas programadas ---
         const tasksGroup = new Adw.PreferencesGroup({

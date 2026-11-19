@@ -6,5 +6,10 @@
       <summary>Atajo de captura rápida</summary>
       <description>Abre el cuadro para crear una nota o un recordatorio.</description>
     </key>
+    <key name="kanban-shortcut" type="as">
+      <default>['&lt;Super&gt;k']</default>
+      <summary>Atajo del tablero de tareas</summary>
+      <description>Abre o cierra el tablero de tareas (solo si está activado en Ajustes). Clave nueva en 0.5.0: tras actualizar hay que cerrar sesión y volver a entrar una vez.</description>
+    </key>
   </schema>
 </schemalist>

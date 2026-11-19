@@ -124,13 +124,15 @@
 .kaito-fin-ok:hover { background-color: #7fd8c3; }
 
 /* Uso de Claude y Codex */
-.kaito-usage { spacing: 3px; }
-.kaito-usage-name { font-weight: bold; color: #ffffff; }
-.kaito-usage-age { font-size: 0.8em; }
-.kaito-usage-label { font-size: 0.85em; color: rgba(255,255,255,0.8); margin-top: 2px; }
-.kaito-usage-track { height: 4px; border-radius: 2px; background-color: rgba(255,255,255,0.12); }
-.kaito-usage-fill { border-radius: 2px; background-color: #5BC8AF; }
-.kaito-usage-mini { width: 28px; height: 4px; border-radius: 2px; background-color: rgba(255,255,255,0.12); }
+.kaito-usage-row { spacing: 10px; padding: 2px 0; }
+.kaito-usage-badge { width: 30px; height: 30px; border-radius: 8px; }
+.kaito-usage-badge-icon { background-color: transparent; }
+.kaito-usage-letter { font-weight: bold; font-size: 15px; }
+.kaito-usage-cell { spacing: 6px; }
+.kaito-usage-pct { font-size: 0.9em; color: #ffffff; min-width: 34px; font-feature-settings: "tnum"; }
+.kaito-usage-note { font-size: 0.85em; }
+.kaito-ring { width: 36px; height: 36px; }
+.kaito-ring-mini { width: 16px; height: 16px; margin-left: 6px; }
 
 /* Tareas programadas */
 .kaito-task-name { margin-left: 8px; }
@@ -182,3 +184,92 @@
 .kaito-provider-opencode { color: #D0C3A0; background-color: rgba(200,180,120,0.16); }
 .kaito-provider-aider { color: #C9B3E6; background-color: rgba(170,130,220,0.16); }
 .kaito-provider-cursor { color: #CFCFCF; background-color: rgba(200,200,200,0.14); }
+
+/* Estado de las tareas del tablero en el menú */
+.kaito-pill-doing { background-color: rgba(91,200,175,0.25); }
+.kaito-pill-review { background-color: rgba(255,163,72,0.25); }
+
+/* Tablero de tareas (opcional) */
+.kaito-board { background-color: #2b2b2f; color: #ffffff; border-radius: 18px; padding: 14px 18px 18px 18px; spacing: 12px; box-shadow: 0 24px 70px rgba(0,0,0,0.65); }
+.kaito-board-head { spacing: 10px; }
+.kaito-board-title { font-size: 20px; font-weight: bold; color: #ffffff; }
+.kaito-board-counts { font-size: 0.9em; }
+.kaito-board-search { width: 240px; margin-top: 0; }
+.kaito-board-btn { padding: 6px 14px; border-radius: 10px; font-weight: bold; background-color: #45454a; color: #ffffff; }
+.kaito-board-btn:hover, .kaito-board-btn:focus { background-color: #55555b; }
+.kaito-board-primary { background-color: #78AEED; color: #0b1f36; }
+.kaito-board-primary:hover, .kaito-board-primary:focus { background-color: #9cc4f2; }
+.kaito-board-danger { background-color: #FFA348; color: #2b1600; }
+.kaito-board-cols { spacing: 12px; }
+.kaito-board-col { background-color: #232326; border-radius: 14px; padding: 10px 8px; spacing: 8px; }
+.kaito-board-col-head { spacing: 8px; padding: 0 6px; }
+.kaito-board-col-name { font-weight: bold; color: #ffffff; }
+.kaito-board-list { spacing: 8px; }
+.kaito-board-empty { padding: 8px 6px; }
+.kaito-board-card { background-color: #36363a; border-radius: 10px; padding: 8px 8px 6px 8px; spacing: 4px; }
+.kaito-board-card-btn { border-radius: 8px; padding: 2px; }
+.kaito-board-card-btn:hover, .kaito-board-card-btn:focus { background-color: rgba(255,255,255,0.06); }
+.kaito-board-card-main { spacing: 6px; }
+.kaito-board-card-top { spacing: 8px; }
+.kaito-board-prio { font-weight: bold; font-size: 1.05em; }
+.kaito-board-card-title { color: #ffffff; }
+.kaito-board-strike { color: rgba(255,255,255,0.5); }
+.kaito-board-chips { spacing: 6px; }
+.kaito-board-key { font-size: 0.8em; }
+.kaito-board-chip { font-size: 0.8em; padding: 0 6px; border-radius: 5px; background-color: rgba(255,255,255,0.10); color: rgba(255,255,255,0.85); }
+.kaito-board-agent { spacing: 4px; font-size: 0.85em; }
+.kaito-board-due { font-size: 0.8em; color: #F5C211; }
+.kaito-board-moves { spacing: 6px; }
+.kaito-board-move { padding: 2px 8px; border-radius: 6px; font-size: 0.85em; color: rgba(255,255,255,0.7); background-color: rgba(255,255,255,0.06); }
+.kaito-board-move:hover, .kaito-board-move:focus { background-color: rgba(120,174,237,0.3); color: #ffffff; }
+.kaito-board-detail { spacing: 12px; padding: 4px 6px; }
+.kaito-board-meta { spacing: 8px; }
+.kaito-board-pill { padding: 2px 10px; border-radius: 999px; font-size: 0.85em; font-weight: bold; color: #ffffff; }
+.kaito-board-chip-btn { padding: 3px 10px; border-radius: 8px; background-color: rgba(255,255,255,0.10); color: #ffffff; }
+.kaito-board-chip-btn:hover, .kaito-board-chip-btn:focus { background-color: rgba(255,255,255,0.18); }
+.kaito-board-title-entry { padding: 6px 4px; font-size: 22px; font-weight: bold; }
+.kaito-board-desc { min-height: 90px; color: #ffffff; }
+.kaito-board-detail-chips { spacing: 8px; }
+.kaito-board-picker { spacing: 6px; padding: 10px 12px; border-radius: 10px; background-color: #232326; }
+.kaito-board-pick-row { border-radius: 6px; padding: 3px 6px; }
+.kaito-board-pick-row:hover, .kaito-board-pick-row:focus { background-color: rgba(255,255,255,0.08); }
+.kaito-board-agent-row { spacing: 8px; }
+.kaito-board-actions { spacing: 8px; padding-top: 4px; }
+.kaito-board-hint { font-size: 0.9em; }
+
+/* Panel de avisos (opcional) */
+.kaito-bell { padding: 0; }
+.kaito-bell-dot { width: 7px; height: 7px; border-radius: 4px; background-color: #FFA348; }
+.kaito-inbox-overlay { background-color: transparent; }
+.kaito-inbox { background-color: #2b2b2f; color: #ffffff; border-radius: 16px; padding: 12px 0 0 0; spacing: 8px; box-shadow: 0 16px 50px rgba(0,0,0,0.6); }
+.kaito-inbox-head { padding: 0 16px; spacing: 8px; }
+.kaito-inbox-title { font-size: 17px; font-weight: bold; }
+.kaito-inbox-link { padding: 2px 8px; border-radius: 6px; font-size: 0.9em; color: #78AEED; }
+.kaito-inbox-link:hover, .kaito-inbox-link:focus { background-color: rgba(255,255,255,0.08); }
+.kaito-inbox-dnd { margin: 0 12px; padding: 10px 12px; border-radius: 10px; background-color: rgba(120,174,237,0.14); spacing: 4px; }
+.kaito-inbox-dnd-title { font-weight: bold; }
+.kaito-inbox-list { spacing: 8px; padding: 0 12px 8px 12px; }
+.kaito-inbox-empty { padding: 24px 0; }
+.kaito-inbox-group { background-color: #36363a; border-radius: 12px; padding: 10px 12px; spacing: 8px; }
+.kaito-inbox-group-head { spacing: 8px; font-size: 0.85em; }
+.kaito-inbox-badge { width: 18px; height: 18px; border-radius: 5px; font-size: 0.8em; font-weight: bold; text-align: center; }
+.kaito-inbox-app { color: rgba(255,255,255,0.75); }
+.kaito-inbox-item { spacing: 10px; }
+.kaito-inbox-avatar { width: 32px; height: 32px; border-radius: 16px; font-size: 0.8em; font-weight: bold; color: #ffffff; text-align: center; }
+.kaito-inbox-col { spacing: 4px; }
+.kaito-inbox-item-title { font-weight: bold; color: #ffffff; }
+.kaito-inbox-body { color: rgba(255,255,255,0.85); font-size: 0.95em; }
+.kaito-inbox-cmd { margin: 2px 0 0 0; }
+.kaito-inbox-actions { spacing: 6px; padding-top: 4px; }
+.kaito-reminder-btn.kaito-inbox-btn { padding: 4px 10px; font-size: 0.9em; }
+.kaito-inbox-reply { margin-top: 4px; }
+.kaito-inbox-resolved { font-size: 0.9em; }
+.kaito-inbox-more { font-size: 0.85em; }
+.kaito-inbox-foot { background-color: #232326; border-radius: 0 0 16px 16px; padding: 10px 14px; spacing: 6px; }
+.kaito-inbox-dnd-label { font-weight: bold; }
+.kaito-inbox-step { width: 26px; padding: 2px 0; border-radius: 6px; background-color: rgba(255,255,255,0.08); text-align: center; }
+.kaito-inbox-step:hover, .kaito-inbox-step:focus { background-color: rgba(255,255,255,0.18); }
+.kaito-inbox-mins { min-width: 56px; text-align: center; }
+.kaito-inbox-dnd-btn { padding: 4px 12px; border-radius: 8px; font-weight: bold; background-color: #3a3a3f; color: #ffffff; }
+.kaito-inbox-dnd-btn:hover, .kaito-inbox-dnd-btn:focus { background-color: #4a4a50; }
+.kaito-inbox-dnd-on { background-color: #78AEED; color: #0b1f36; }

@@ -22,12 +22,13 @@ const QUEUED_SHOWN = 12;
 export class ReminderManager {
     /**
      * @param {() => void} onChange se llama tras posponer o completar
-     * @param {{quiet?: () => ({quiet: boolean, holdReminders: boolean}|null)}} opts quiet: estado de No molestar
-     *   (sin sonido; con holdReminders los recordatorios esperan a que termine)
+     * @param {{quiet?: () => ({quiet: boolean, holdReminders: boolean}|null), onDue?: (list) => void}} opts quiet: estado
+     *   de No molestar (sin sonido; con holdReminders los recordatorios esperan a que termine); onDue: todos los vencidos
      */
     constructor(onChange, opts = {}) {
         this._onChange = onChange;
         this._quiet = opts.quiet ?? (() => null);
+        this._onDue = opts.onDue ?? null; // panel de avisos: recibe los vencidos (también los retenidos)
         this._cards = new Map(); // id -> actor
         this._box = null;
         this.check();
@@ -40,13 +41,20 @@ export class ReminderManager {
 
     /** Muestra los vencidos (no hechos) que aún no tienen tarjeta. */
     check() {
+        const now = Date.now();
+        const all = readReminders()
+            .filter(r => r.id && !r.done && new Date(r.due).getTime() <= now)
+            .sort((a, b) => new Date(a.due) - new Date(b.due));
+        if (this._onDue && all.length) {
+            try {
+                this._onDue(all);
+            } catch (e) {
+                console.warn(`kaito: recordatorios al panel: ${e.message}`);
+            }
+        }
         if (this._quiet()?.holdReminders)
             return; // No molestar con "Silenciar también recordatorios": salen al terminar
-        const now = Date.now();
-        const due = readReminders()
-            .filter(r => r.id && !r.done && new Date(r.due).getTime() <= now)
-            .sort((a, b) => new Date(a.due) - new Date(b.due))
-            .slice(0, MAX_VISIBLE);
+        const due = all.slice(0, MAX_VISIBLE);
         const ids = new Set(due.map(r => r.id));
         // Quita las que ya no corresponden (hechas o pospuestas desde otro sitio).
         for (const [id] of this._cards) {

@@ -7,6 +7,7 @@
 # Construye localhost/kaito-compat:<v> si no existe, monta el repo en solo lectura y ejecuta
 # in-container.sh (tests de GJS, gnome-shell headless + autoprueba, prefs). Nunca toca tu sesión.
 # UBUNTU_MIRROR=http://…/ubuntu/ cambia la réplica de Ubuntu al construir.
+# KAITO_COMPAT_FEATURES=on arranca con el tablero y el panel de avisos (opcionales) ya activados.
 # Las imágenes ocupan ~1-1.5 GB cada una; se borran al final salvo con --keep-images.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -29,7 +30,7 @@ trap 'rm -f "$OUT"' EXIT
 for v in "${VERS[@]}"; do
     if [ "$v" = host ]; then
         echo "##### host"
-        SRC="$REPO" bash "$HERE/in-container.sh" | tee "$OUT"
+        SRC="$REPO" KAITO_SHOT=${SHOT_DIR:+$SHOT_DIR/kaito-host.png} KAITO_COMPAT_FEATURES=${KAITO_COMPAT_FEATURES:-} bash "$HERE/in-container.sh" | tee "$OUT"
         grep -q '^RESULT .* FAIL' "$OUT" && RC=1
         continue
     fi
@@ -39,7 +40,7 @@ for v in "${VERS[@]}"; do
         podman build -q --build-arg BASE=${BASE[$v]} --build-arg UBUNTU_MIRROR="${UBUNTU_MIRROR:-}" --build-arg UBUNTU_EXTRAS=$([ $v = 50u ] && echo 1 || echo 0) -t $img -f "$HERE/Containerfile" "$HERE" || { RC=1; continue; }
     fi
     podman run --rm --security-opt label=disable --network none \
-        -v "$REPO":/src:ro ${SHOT_DIR:+-v "$SHOT_DIR":/shots -e KAITO_SHOT=/shots/kaito-$v.png} $img bash /src/tests/compat/in-container.sh | tee "$OUT"
+        -v "$REPO":/src:ro ${KAITO_COMPAT_FEATURES:+-e KAITO_COMPAT_FEATURES=$KAITO_COMPAT_FEATURES} ${SHOT_DIR:+-v "$SHOT_DIR":/shots -e KAITO_SHOT=/shots/kaito-$v.png} $img bash /src/tests/compat/in-container.sh | tee "$OUT"
     grep -q '^RESULT .* FAIL' "$OUT" && RC=1
     grep -q '^RESULT ' "$OUT" || RC=1
     [ $KEEP = 1 ] || podman rmi -f $img >/dev/null

@@ -2,8 +2,12 @@
 """Fusiona (o quita) los hooks y la statusLine de Kaito en ~/.claude/settings.json.
 
 Uso:
-  merge-settings.py install   [--settings RUTA] [--statusline] [--apply]
-  merge-settings.py uninstall [--settings RUTA] [--apply]
+  merge-settings.py install   [--settings RUTA] [--statusline | --statusline-only] [--apply]
+  merge-settings.py uninstall [--settings RUTA] [--statusline-only] [--apply]
+  merge-settings.py status    [--settings RUTA]      (solo lectura: JSON con el estado de la statusLine)
+
+--statusline-only toca solo la statusLine (no los hooks): install la añade si no tienes ninguna
+(nunca sustituye otra distinta) y uninstall la quita solo si es la de Kaito. Lo usan los Ajustes.
 
 Sin --apply solo muestra el resumen de cambios (no escribe nada). Con --apply hace
 copia de seguridad (settings.json.bak-kaito-<fecha>) y escribe de forma atómica.
@@ -96,8 +100,11 @@ def has_path(groups, path):
     return False
 
 
-def do_install(settings, want_status, report):
+def do_install(settings, want_status, report, only_status=False):
     tpl = load_template()
+    if only_status:
+        install_status(settings, tpl, report)
+        return
     hook_path = os.path.join(HERE, HOOK_NAME)
     strip_kaito(settings, hook_path, report)
     hooks = settings.setdefault("hooks", {})
@@ -113,24 +120,41 @@ def do_install(settings, want_status, report):
             cur.extend(copy.deepcopy(groups))
             report.append("+ %s: añadido %s" % (event, hook_path))
     if want_status:
-        sl = settings.get("statusLine")
-        mine = tpl["statusLine"]
-        sl_cmd = sl.get("command", "") if isinstance(sl, dict) else ""
-        if sl is None:
+        install_status(settings, tpl, report)
+
+
+def install_status(settings, tpl, report):
+    sl = settings.get("statusLine")
+    mine = tpl["statusLine"]
+    sl_cmd = sl.get("command", "") if isinstance(sl, dict) else ""
+    if sl is None:
+        settings["statusLine"] = mine
+        report.append("+ statusLine: añadida")
+    elif is_kaito(sl_cmd, STATUS_NAME):
+        if cmd_script(sl_cmd) != cmd_script(mine["command"]):
             settings["statusLine"] = mine
-            report.append("+ statusLine: añadida")
-        elif is_kaito(sl_cmd, STATUS_NAME):
-            if cmd_script(sl_cmd) != cmd_script(mine["command"]):
-                settings["statusLine"] = mine
-                report.append("~ statusLine: ruta de Kaito actualizada")
-            else:
-                report.append("= statusLine: ya presente")
+            report.append("~ statusLine: ruta de Kaito actualizada")
         else:
-            report.append("! statusLine: ya tienes una (%s), no se toca" % sl_cmd)
+            report.append("= statusLine: ya presente")
+    else:
+        report.append("! statusLine: ya tienes una (%s), no se toca" % (sl_cmd or json.dumps(sl, ensure_ascii=False)))
 
 
-def do_uninstall(settings, report):
-    strip_kaito(settings, None, report)
+def status_of(settings):
+    """{state: none|kaito|kaito-other-path|other, command}: la statusLine actual, sin tocar nada."""
+    sl = settings.get("statusLine")
+    if sl is None:
+        return {"state": "none", "command": None}
+    cmd = sl.get("command", "") if isinstance(sl, dict) else ""
+    if is_kaito(cmd, STATUS_NAME):
+        same = cmd_script(cmd) == os.path.join(HERE, STATUS_NAME)
+        return {"state": "kaito" if same else "kaito-other-path", "command": cmd}
+    return {"state": "other", "command": cmd or json.dumps(sl, ensure_ascii=False)}
+
+
+def do_uninstall(settings, report, only_status=False):
+    if not only_status:
+        strip_kaito(settings, None, report)
     sl = settings.get("statusLine")
     if isinstance(sl, dict) and is_kaito(sl.get("command", ""), STATUS_NAME):
         del settings["statusLine"]
@@ -159,9 +183,10 @@ def atomic_write(path, data):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["install", "uninstall"])
+    ap.add_argument("action", choices=["install", "uninstall", "status"])
     ap.add_argument("--settings", default=os.path.join(os.path.expanduser("~"), ".claude", "settings.json"))
     ap.add_argument("--statusline", action="store_true", help="(install) añade también la statusLine si no hay una")
+    ap.add_argument("--statusline-only", action="store_true", help="solo la statusLine (no los hooks)")
     ap.add_argument("--apply", action="store_true", help="escribe los cambios (si no, solo los muestra)")
     a = ap.parse_args()
 
@@ -179,13 +204,16 @@ def main():
             print("error: %s no es un objeto JSON." % path, file=sys.stderr)
             return 1
     before = copy.deepcopy(settings)
+    if a.action == "status":
+        print(json.dumps(status_of(settings), ensure_ascii=False))
+        return 0
 
     report = []
     try:
         if a.action == "install":
-            do_install(settings, a.statusline, report)
+            do_install(settings, a.statusline, report, a.statusline_only)
         else:
-            do_uninstall(settings, report)
+            do_uninstall(settings, report, a.statusline_only)
     except SystemExit as e:
         print(e, file=sys.stderr)
         return 1

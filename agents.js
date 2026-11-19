@@ -59,7 +59,8 @@ export function parseTail(text) {
     return {cwd, lastAction, lastText};
 }
 
-const TICKET_RE = /^\s*Trabaja en el ticket de Jira ([A-Z][A-Z0-9_]*-\d+)/;
+// Ticket de Jira o tarea local del tablero (K-<n>, board.js localTaskPrompt).
+const TICKET_RE = /^\s*Trabaja en (?:el ticket de Jira|la tarea) ([A-Z][A-Z0-9_]*-\d+)/;
 
 /** Texto escrito por el usuario en una entrada `user` (sin tool_result), o null. */
 function userText(e) {
@@ -74,8 +75,8 @@ function userText(e) {
 }
 
 /**
- * Cabeza de un .jsonl → clave del ticket de Jira si el primer mensaje del usuario es un
- * prompt de Kaito ("Trabaja en el ticket de Jira KEY: …"); null si es otro mensaje;
+ * Cabeza de un .jsonl → clave del ticket de Jira (o tarea K-<n>) si el primer mensaje del usuario es un
+ * prompt de Kaito ("Trabaja en el ticket de Jira KEY: …" / "Trabaja en la tarea K-3: …"); null si es otro mensaje;
  * undefined si aún no hay mensaje del usuario (no cachear).
  */
 export function ticketFromHead(text) {

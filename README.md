@@ -41,6 +41,7 @@ El bootstrap clona, ejecuta `install.sh` y deja el comando `kaito` en `~/.local/
   el menú avisa arriba ("Hay una versión nueva (x.y.z) · Actualizar") y el botón hace lo mismo.
 - **Recargar el código:** `kaito reload` (útil al desarrollar: aplica los cambios de `*.js` y `stylesheet.css`).
 - **Diagnóstico:** `kaito doctor`. También `kaito version` y `kaito check [--json]`.
+- **Tablero de tareas:** `kaito kanban` lo abre (opcional; ver [Tablero de tareas](#tablero-de-tareas)). `kaito doctor` dice si el tablero y el panel de avisos están activados.
 - **Desinstalar:** `kaito uninstall` (`--purge` borra también el código y los datos).
 
 ### Publicar una versión
@@ -223,7 +224,7 @@ Menú del indicador > Ajustes (o `gnome-extensions prefs kaito@runnea`): conexi�
 (URL, email, token en el llavero, qué tickets mostrar con presets o JQL propia, máximo),
 ventana de actividad de agentes, intervalo de refresco y borrado de pendientes hechos.
 Se guardan en `config.json` (`jiraJql`, `jiraPreset`, `jiraMax`, `jiraView`, `jiraViews`, `jiraBuiltinViews`, `jiraProjects`, `terminal`, `agentWindowMinutes`,
-`liveSeconds`, `refreshSeconds`, `notifyNeeds`, `notifyDone`, `dailySummary`, `pinned`, `showUsage`,
+`liveSeconds`, `refreshSeconds`, `notifyNeeds`, `notifyDone`, `dailySummary`, `pinned`, `showUsage`, `usagePanelProvider`,
 `tasksEnabled`, `checkUpdates`, `jiraEnabled`, `workHours`, `dndManual`, `dndUntil`, `dndSkipUntil`,
 `dndSilenceReminders`, `agentProviders`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
 `~/Documentos`, `~/Documents`, `~/dev`, `~/code`, `~/projects` y `~/src`.
@@ -359,7 +360,8 @@ encuentras Codex y no tienes ya un `notify`; si tienes otro, no lo toca y te dic
   tuyas) hace `PUT /rest/api/3/issue/<KEY>/assignee`. Ajustes > "Vistas de Jira": ocultar las integradas
   (`jiraBuiltinViews`) y vistas propias con nombre y JQL (`jiraViews: [{id, name, jql, enabled}]`).
 - Pruebas: `node when.test.js` (con `TZ=Europe/Madrid` prueba también el cambio de hora), `gjs -m kaito.test.js`, `gjs -m jiradraft.test.js`,
-  `XDG_CONFIG_HOME=$(mktemp -d) XDG_DATA_HOME=$(mktemp -d) gjs -m tasks.test.js`, `node quiet.test.js`, `node providers.test.js`
+  `XDG_CONFIG_HOME=$(mktemp -d) XDG_DATA_HOME=$(mktemp -d) gjs -m tasks.test.js`, `node quiet.test.js`, `node providers.test.js`,
+  `node board.test.js` (tablero y panel de avisos), `node usage.test.js` (anillos de uso)
   (también con `gjs -m`), `bash tests/cli.test.sh`, `hooks/kaito-hook.py --selftest`, `hooks/kaito-statusline.py --selftest`,
   `hooks/kaito-codex-notify.py --selftest`.
 
@@ -440,15 +442,28 @@ de 24 h se borran solos.
 
 ## Uso de Claude y Codex
 
-Sección "Uso" arriba del menú (y de la tarjeta fija) con barras de los límites de 5 h y semanal de
-cada proveedor que tenga datos, con la hora de reinicio y "actualizado hace N min"
-(verde < 70 %, naranja 70-90 %, rojo >= 90 %; ventana ya reiniciada = 0 %). En la barra superior,
-una mini barra con el uso de 5 h de Claude. Se desactiva en Ajustes > General (`showUsage`).
+Sección "Uso" arriba del menú (y de la tarjeta fija), en anillos: una fila por proveedor activado
+(`agentProviders`) con una insignia (el icono de su app si está instalado en el tema de iconos; si no, su
+inicial sobre su color), un anillo de 5 h y otro semanal con su porcentaje (columna "5 h · semana") y una
+nota a la derecha: "reinicia 14:50" o, si las ventanas ya se reiniciaron, la antigüedad de los datos
+("hace 6 d"). Verde < 70 %, naranja 70-90 %, rojo >= 90 %; lo reiniciado (= 0 %) o viejo sale atenuado.
+Al pasar el ratón por la insignia, la nota dice proveedor y horas de reinicio. **Gemini CLI** (si está
+instalado) sale como "sin datos de límite": su cuota vive en el servidor y no guarda nada fiable en local,
+así que no se inventa ningún número. **OpenCode** no tiene límites propios: su fila dice qué proveedor usa
+("usa tu Claude"), leído de `~/.config/opencode/opencode.json` (`model`) o del último modelo usado
+(`~/.local/state/opencode/model.json`), solo lectura. En la barra superior, un mini anillo con el uso de
+5 h del proveedor de Ajustes > General > "Anillo en la barra superior" (`usagePanelProvider`: `claude` por
+defecto, `codex` o `none`). Se desactiva en Ajustes > General (`showUsage`). Lógica pura en `usage.js`
+(`node usage.test.js`).
 
 - **Claude**: Claude Code solo da los límites de suscripción a su `statusLine`. Actívala con
   `./install.sh --statusline` (`hooks/kaito-statusline.py`): guarda `~/.cache/kaito/claude-usage.json` (solo si Claude Code
   manda `rate_limits`, que aparecen tras la primera respuesta de la sesión) e imprime
   `<modelo> · 5h 42% · 7d 18%`. Si ya tienes un `statusLine`, encadena ese script con el tuyo.
+  También desde Ajustes > General > **Datos de uso de Claude**: dice si la statusLine de
+  `~/.claude/settings.json` es la de Kaito y la instala o quita (`hooks/merge-settings.py install|uninstall
+  --statusline-only --apply`, con copia `settings.json.bak-kaito-*`). Si tienes otra barra de estado no la toca
+  y te la muestra. `merge-settings.py status` lo consulta sin escribir nada.
 - **Codex**: se lee el último evento `token_count` del rollout más reciente de
   `~/.codex/sessions/**/rollout-*.jsonl` (últimos 256 KB; como mucho cada 60 s). Solo se guardan
   números, nunca el contenido de la conversación. Los datos son de la última vez que usaste Codex.
@@ -507,3 +522,65 @@ cae más de un 20 %», o «mañana a las 10 revisa RUN-12326 que las carreras vi
   Clic en la fila: el último resultado. Ajustes > Tareas programadas las desactiva todas.
 - **Datos**: `~/.config/kaito/tasks.json`; historial en `~/.local/share/kaito/task-runs/<id>/<fecha>.json`
   (`{started, finished, ok, summary, result, queries, error}`; se guardan las 20 últimas por tarea).
+
+## Tablero de tareas
+
+Opcional (Ajustes > Tablero y avisos > **Tablero de tareas**, `kanbanEnabled`; apagado por defecto). Convierte
+los Pendientes en tareas con estado y prioridad, en un tablero de 4 columnas: **Por hacer**, **Haciendo**,
+**En revisión** y **Hecho**.
+
+- **Abrir**: menú > **Abrir tablero**, el atajo **Super+K** (`kanban-shortcut` en el esquema; también lo
+  cierra) o `kaito kanban` desde la terminal (toca `~/.cache/kaito/open-kanban`, que la extensión vigila).
+  Esc o un clic fuera lo cierran. **El atajo es una clave nueva del esquema (0.5.0): tras actualizar, cierra
+  sesión y vuelve a entrar una vez**; hasta entonces funcionan el menú y `kaito kanban`.
+- **Tablero**: cabecera con abiertas y hechas esta semana, búsqueda por texto o repo y **Nueva tarea**. Cada
+  tarjeta: prioridad (⇈ ↑ = ↓), título, `K-<n>`, repo, «Claude trabajando» si hay un agente vivo con esa
+  tarea, recordatorio si lo hay, y botones **←** / **→ <siguiente>** para moverla.
+- **Detalle** (clic en una tarjeta): estado (clic: siguiente), prioridad (clic: cambia), título y descripción
+  editables (se guardan al volver o cerrar), repo (el chip recorre los repos recientes; **Otra…** abre el
+  buscador de carpetas, el mismo que el de Jira, y «Otra carpeta…» con zenity), y:
+  - **Mandar a Claude**: igual que un ticket de Jira. Abre Claude en el repo con el prompt
+    «Trabaja en la tarea K-<n>: <título>» + la descripción + el mismo párrafo de Git (rama
+    `K-<n>-<resumen>`, commits con prefijo `K-<n>: `, `git push`, sin PR). La tarea pasa a **Haciendo**.
+    Al terminar el agente con commits nuevos, la tarea pasa sola a **En revisión**, sale el aviso
+    «K-<n> listo» y el recordatorio «Revisar K-<n>» (como con Jira, sin llamar a Jira).
+  - **Programar revisión** (captura en la pestaña Tarea con «K-<n>: revisa que »), **Ir al agente** y
+    **Borrar** (pide confirmación con un segundo clic).
+- **Menú**: la sección «Pendientes» pasa a llamarse «Tareas» y cada fila muestra prioridad y estado; clic
+  abre su detalle. La entrada del menú crea tareas.
+- **Datos**: siguen en `~/.config/kaito/todos.json`, compatibles hacia atrás: cada pendiente gana
+  `{id: "K-<n>", state: "todo"|"doing"|"review"|"done", priority, repo, description, created, updated}` y
+  `done` se mantiene sincronizado con `state`, así que si desactivas el tablero la lista de Pendientes de
+  siempre sigue funcionando (y lo que marques ahí como hecho pasa a **Hecho** al volver). El contador de
+  `K-<n>` está en `~/.config/kaito/kanban.json` (no se reutilizan números).
+
+## Panel de avisos
+
+Opcional (Ajustes > Tablero y avisos > **Panel de avisos**, `inboxEnabled`; apagado por defecto). Un solo
+sitio con todo lo que Kaito te cuenta: se abre con la **campana** del indicador (número de no leídos; punto
+naranja si un agente te necesita) o con menú > **Avisos (N)**. Abrirlo los marca como leídos; un clic fuera
+o Esc lo cierran.
+
+- Agrupado por agente (o fuente: tareas programadas, recordatorios, Kaito) con su proveedor, repo y hora;
+  «+N avisos» despliega los anteriores. **Borrar todo** lo vacía.
+- En cada aviso: **Permitir** / **Denegar** si es una petición de permiso que aún espera (lo mismo que el
+  cuadro de respuesta), un campo **Responder** (Enter: como Claude Code no admite texto desde fuera, se
+  copia al portapapeles y te lleva a su terminal; queda «Respuesta copiada») y sus acciones (Ir al agente,
+  Abrir PR, Revisar, Ver completo, Comentar en Jira, Actualizar, Posponer, Hecho).
+- Pie: **No molestar** con − / + minutos (15–240) y **Activar** (`dndManual` + `dndUntil`).
+
+Cómo sale cada aviso con el panel activado:
+
+| Aviso | Trabajando | No molestar | Fuera de horario |
+|---|---|---|---|
+| Agente te necesita | Interrumpe (notificación + respuesta, como siempre) | Interrumpe | Solo panel, punto naranja |
+| Recordatorio | Igual que siempre (tarjeta) | Sin sonido; con «Silenciar también recordatorios», solo panel | Igual que con No molestar |
+| Agente terminó, «… listo», resultado de tarea programada | Aviso breve de GNOME (se va solo) | Solo panel | Solo panel |
+| Actualización disponible | Solo panel (+ punto azul) | Solo panel | Solo panel |
+| Resumen del día | Igual que siempre | Igual que siempre | Igual que siempre |
+| Ticket creado, comentario publicado | Aviso breve, no se guarda | — | — |
+
+Todo (salvo las confirmaciones) se guarda también en el panel, así que con el panel activado **no** sale la
+tarjeta «Mientras no estabas» ni se quedan tarjetas fijas de «listo» o de tareas. Datos:
+`~/.cache/kaito/inbox.json` (máximo 100 avisos, se borran a los 7 días, sin repetidos). Desactivado, todo
+funciona como antes (tarjetas fijas, cola de No molestar y «Mientras no estabas»).

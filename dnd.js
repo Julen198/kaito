@@ -105,6 +105,17 @@ export class QuietController {
         }
     }
 
+    /** "No molestar" durante `minutes` (pie del panel de avisos: 15–240). */
+    setMinutes(minutes) {
+        const m = Math.min(240, Math.max(1, Math.round(Number(minutes) || 30)));
+        try {
+            updateConfig({dndManual: true, dndUntil: Date.now() + m * 60000, dndSkipUntil: null});
+        } catch (e) {
+            console.warn(`kaito: no se pudo guardar No molestar: ${e.message}`);
+        }
+        return this.tick();
+    }
+
     /** Opciones del menú: 'on' | 'hour' | 'tomorrow' | 'off'. */
     set(mode) {
         const cfg = readConfig();

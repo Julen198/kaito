@@ -22,13 +22,13 @@ mkdir -p $EXT && cp -a "$SRC"/. $EXT/ && rm -rf $EXT/.git $EXT/schemas/gschemas.
 glib-compile-schemas $EXT/schemas || res schemas FAIL
 
 # 1. Tests de GJS (detectan JS que el SpiderMonkey de esta versión no entiende).
-for t in kaito.test.js jiradraft.test.js tasks.test.js quiet.test.js providers.test.js; do
+for t in kaito.test.js jiradraft.test.js tasks.test.js quiet.test.js providers.test.js board.test.js usage.test.js; do
     fresh $W/t-$t
     out=$(cd $EXT && timeout 120 dbus-run-session -- gjs -m $t 2>&1); rc=$?
     if [ $rc -eq 0 ]; then res "gjs:$t" PASS "$(echo "$out" | grep -E 'OK' | tail -1)"; else res "gjs:$t" FAIL "rc=$rc"; echo "$out" | tail -20; fi
 done
 if command -v node >/dev/null; then
-    for t in when.test.js quiet.test.js providers.test.js; do
+    for t in when.test.js quiet.test.js providers.test.js board.test.js usage.test.js; do
         (cd $EXT && TZ=Europe/Madrid node $t >/dev/null 2>&1) && res node:$t PASS || res node:$t FAIL
     done
 else
@@ -42,7 +42,7 @@ for h in kaito-hook.py kaito-statusline.py kaito-codex-notify.py; do
     python3 $EXT/hooks/$h --selftest >/dev/null 2>&1 && res hook:$h PASS || res hook:$h FAIL
 done
 # Iconos simbólicos que usa Kaito (luna de No molestar, cola) en el Adwaita de esta versión.
-for i in weather-clear-night-symbolic mail-unread-symbolic; do
+for i in weather-clear-night-symbolic mail-unread-symbolic preferences-system-notifications-symbolic; do
     find /usr/share/icons/Adwaita -name "$i.*" 2>/dev/null | grep -q . && res icon:$i PASS || res icon:$i FAIL
 done
 
@@ -59,7 +59,13 @@ LOG=$W/shell.log
 mkdir -p $XDG_DATA_HOME/gnome-shell/extensions $XDG_CONFIG_HOME/kaito $HOME/Desktop
 cp -a $EXT $XDG_DATA_HOME/gnome-shell/extensions/kaito@runnea
 cp -a "$SRC"/tests/compat/selftest@kaito $XDG_DATA_HOME/gnome-shell/extensions/
+# KAITO_COMPAT_FEATURES=on: arranca con el tablero y el panel de avisos activados (la autoprueba los comprueba y los apaga).
+[ "${KAITO_COMPAT_FEATURES:-}" = on ] && echo '{"kanbanEnabled": true, "inboxEnabled": true}' > $XDG_CONFIG_HOME/kaito/config.json && echo "info opcionales activados desde el arranque"
 echo '[{"id":"t1","name":"Revisar ventas","key":"RUN-1","cwd":"/tmp","enabled":true,"lastOk":true,"prompt":"x","nextRun":"2099-01-01T09:00:00.000Z"}]' > $XDG_CONFIG_HOME/kaito/tasks.json
+# Uso falso (0.5.0, anillos): Claude 42 % / 18 % desde la statusLine y un rollout de Codex de hoy con 78 % / 95 %.
+NOW=$(date +%s); mkdir -p $XDG_CACHE_HOME/kaito $HOME/.codex/sessions/$(date +%Y/%m/%d)
+echo "{\"ts\": $NOW, \"rate_limits\": {\"five_hour\": {\"used_percentage\": 42, \"resets_at\": $((NOW + 9000))}, \"seven_day\": {\"used_percentage\": 18, \"resets_at\": $((NOW + 4 * 86400))}}}" > $XDG_CACHE_HOME/kaito/claude-usage.json
+echo "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\", \"type\": \"event_msg\", \"payload\": {\"type\": \"token_count\", \"rate_limits\": {\"primary\": {\"used_percent\": 78, \"window_minutes\": 300, \"resets_in_seconds\": 3600}, \"secondary\": {\"used_percent\": 95, \"window_minutes\": 10080, \"resets_in_seconds\": 200000}}}}" > $HOME/.codex/sessions/$(date +%Y/%m/%d)/rollout-2026-01-01T00-00-00-00000000-0000-0000-0000-000000000000.jsonl
 if [ -n "$IN_CONTAINER" ]; then
     # Sin logind: con /run/systemd/seats gnome-shell cree que hay systemd y muere al no haber bus de sistema.
     rm -rf /run/systemd/seats
@@ -112,7 +118,7 @@ grep -q 'SELFTEST done' $LOG && ! grep -q 'SELFTEST FAIL' $LOG && res selftest P
 errs=$(awk '# (El aviso de la papelera de ubuntu-dock es del contenedor, sin gvfs; su pila arrastra la autoprueba.)
     function k(x) { if (x ~ /^[^\n]*Impossible to monitor trash/) return 0; gsub(/kaito-compat/, "", x); return x ~ /kaito|selftest/ }
     /JS ERROR|Unhandled promise|CRITICAL|JS WARNING|Gjs-WARNING/ { if (k(b)) print b; b = $0; next }
-    b != "" && /@.*:[0-9]+(:[0-9]+)?$|^Stack trace|^$/ { b = b "\n" $0; next }
+    b != "" && /@.*:[0-9]+(:[0-9]+)?$|^Stack trace|^== Stack trace|^#[0-9]+ |^$/ { b = b "\n" $0; next }
     { if (k(b)) print b; b = "" }
     END { if (k(b)) print b }' $LOG)
 [ -z "$errs" ] && res shell:errors PASS "0 errores de kaito" || { res shell:errors FAIL; echo "$errs" | head -30; }

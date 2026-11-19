@@ -13,7 +13,10 @@ import {
     terminalMigration, resolveTerminal, gnomeTerminalArgv, kgxArgv, ptyxisExportsTab, terminalFocusLevel,
     terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck, changelogBody,
     readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH, CLAUDE_PROJECTS,
+    readBoard, readTodos, addBoardTask, patchBoardTask, readInbox, writeInbox, readJson, writeJson, TODOS_PATH, KANBAN_PATH,
 } from './common.js';
+import {localTaskPrompt} from './board.js';
+import {inboxPush} from './inbox.js';
 import {queuePush} from './quiet.js';
 import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork,
     pathsFromTranscript, dirsFromPaths, ticketBranches, findTicketWork} from './finish.js';
@@ -611,6 +614,38 @@ if (GLib.get_user_config_dir().startsWith('/tmp') || CONFIG_PATH.includes('/scra
     writeUpdateState({notified: '0.4.0'});
     writeUpdateState({at: 1});
     eq(readUpdateState(), {notified: '0.4.0', at: 1}, 'update.json conserva la versión avisada');
+
+    // 0.5.0: opcionales apagados por defecto; tablero sobre todos.json; panel de avisos.
+    c = readConfig();
+    eq([c.kanbanEnabled, c.inboxEnabled], [false, false], 'tablero y avisos apagados por defecto');
+    updateConfig({kanbanEnabled: true, inboxEnabled: true});
+    c = readConfig();
+    eq([c.kanbanEnabled, c.inboxEnabled], [true, true], 'tablero y avisos activados');
+    writeJson(TODOS_PATH, [{text: 'viejo', done: false}, {text: 'hecho', done: true}]);
+    let b = readBoard();
+    eq(b.map(t => [t.id, t.state, t.done]), [['K-1', 'todo', false], ['K-2', 'done', true]], 'readBoard migra todos.json');
+    eq(readTodos().map(t => t.id), ['K-1', 'K-2'], 'migración escrita');
+    eq(readJson(KANBAN_PATH, {}).seq, 2, 'contador persistido');
+    const nt = addBoardTask({text: 'Nueva', priority: 'high'});
+    eq([nt.id, nt.state, readTodos().length], ['K-3', 'todo', 3], 'addBoardTask');
+    patchBoardTask('K-3', t => ({...t, state: 'doing', done: false}));
+    eq(readBoard().find(t => t.id === 'K-3').state, 'doing', 'patchBoardTask');
+    patchBoardTask('K-3', () => null);
+    eq(readTodos().map(t => t.id), ['K-1', 'K-2'], 'borrar tarea');
+    eq(addBoardTask({text: 'otra'}).id, 'K-4', 'no reutiliza K-3');
+    // la lista antigua (tablero desactivado) marca como hecho: al volver, pasa a Hecho
+    writeJson(TODOS_PATH, readTodos().map(t => (t.id === 'K-1' ? {...t, done: true} : t)));
+    eq(readBoard().find(t => t.id === 'K-1').state, 'done', 'done de la lista antigua');
+    writeInbox(inboxPush(inboxPush([], {id: 'a', kind: 'done', title: 'x'}), {id: 'a', kind: 'done', title: 'y'}));
+    eq(readInbox().map(x => x.title), ['y'], 'inbox.json deduplicado');
+    // tarea local mandada a Claude: prompt propio en lugar del de Jira
+    const repo2 = GLib.dir_make_tmp('kaito-repo-XXXXXX');
+    const task = {id: 'K-4', text: 'Arreglar login', description: 'El botón no responde'};
+    let got2 = null;
+    const r2 = sendIssueToClaude({issue: {key: task.id, summary: task.text}, base: '', description: null, repo: repo2,
+        terminal: 'kgx', prompt: localTaskPrompt(task, repo2)}, o => (got2 = o), {has: x => x === 'kgx', ptyxisFlatpak: () => false, ptyxisVersion: () => null});
+    eq(new TextDecoder().decode(GLib.file_get_contents(r2.promptPath)[1]), localTaskPrompt(task, repo2), 'prompt de tarea local');
+    eq([r2.promptPath.endsWith('/K-4.txt'), got2.argv[0]], [true, 'kgx'], 'lanzado como un ticket');
 } else {
     print('(sin XDG temporales: se omiten las pruebas de config 0.4)');
 }
