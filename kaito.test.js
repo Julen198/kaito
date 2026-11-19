@@ -12,10 +12,11 @@ import {
     viewJql, visibleViews, normalizeCustomViews, projectsFromIssues, shortName, mapSearchIssue, RECENT_JQL,
     terminalMigration, resolveTerminal, gnomeTerminalArgv, kgxArgv, ptyxisExportsTab, terminalFocusLevel,
     terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck, changelogBody,
-    readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH,
+    readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH, CLAUDE_PROJECTS,
 } from './common.js';
 import {queuePush} from './quiet.js';
-import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork} from './finish.js';
+import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork,
+    pathsFromTranscript, dirsFromPaths, ticketBranches, findTicketWork} from './finish.js';
 import {parseTail, ticketFromHead, firstLine} from './agents.js';
 
 let n = 0;
@@ -473,6 +474,20 @@ eq(filterRepos(fr, 'CAFE nandu').length, 1, 'filtro sin acentos ni mayúsculas')
     eq([reviewReminderText('RUN-1', 'Arreglar x'), reviewReminderText('RUN-1', '')], ['Revisar RUN-1 · Arreglar x', 'Revisar RUN-1'], 'texto recordatorio');
 }
 
+// Transcript: rutas con las que trabajó el agente (recientes primero) y ramas del ticket
+{
+    const tu = input => JSON.stringify({type: 'assistant', message: {content: [{type: 'text', text: 'cd /no/esto'}, {type: 'tool_use', name: 'x', input}]}});
+    const jsonl = [tu({command: 'cd /srv/a && git status'}), 'linea {cortada', JSON.stringify({type: 'user', message: {content: 'cd /no'}}),
+        tu({file_path: '/srv/b/src/x.js'}), tu({command: "git -C '/srv/c d' log; cd ~/w/e | cat"}), tu({command: 'cd rel && ls'}),
+        tu({file_path: '/srv/a/y.js'})].join('\n');
+    eq(pathsFromTranscript(jsonl, '/home/u'), ['/srv/a/y.js', '/home/u/w/e', '/srv/c d', '/srv/b/src/x.js', '/srv/a'], 'pathsFromTranscript');
+    eq(pathsFromTranscript('', '/h'), [], 'pathsFromTranscript vacío');
+    const dirs = new Set(['/srv', '/srv/a', '/srv/b', '/srv/b/src']);
+    eq(dirsFromPaths(['/srv/a/y.js', '/srv/b/src/x.js', '/srv/a', '/srv/zz/q/f.js', '/nada/f'], p => dirs.has(p)), ['/srv/a', '/srv/b/src', '/srv'], 'dirsFromPaths');
+    const refs = 'main 100\nrun-5-Algo 300\nfeature/RUN-5-b 200\nRUN-5-viejo 10\nRUN-50-otro 400\nbasura\n';
+    eq(ticketBranches(refs, 'RUN-5', 100), [{branch: 'run-5-Algo', ts: 300}, {branch: 'feature/RUN-5-b', ts: 200}], 'ticketBranches');
+}
+
 // detectWork en un repo temporal con un "origin" bare temporal
 if (GLib.find_program_in_path('git')) {
     const tmp = GLib.dir_make_tmp('kaito-git-XXXXXX');
@@ -515,6 +530,49 @@ if (GLib.find_program_in_path('git')) {
     eq([wk.commits.length, wk.pushed], [2, false], 'detectWork: commit posterior sin subir');
     eq(await detectWork(tmp, since), null, 'detectWork: no es repo');
     eq(await detectWork('relativo', since), null, 'detectWork: ruta relativa');
+
+    // El agente trabajó en OTRO repo que su cwd: rama con la clave del ticket en el segundo repo
+    {
+        const repo2 = `${tmp}/otro`, home2 = GLib.build_filenamev([tmp, 'h']);
+        sh(tmp, 'init', '-q', '-b', 'main', repo2);
+        GLib.file_set_contents(`${repo2}/b.txt`, '1');
+        sh(repo2, 'add', '.');
+        extraEnv = [`GIT_COMMITTER_DATE=@${old} +0000`];
+        sh(repo2, 'commit', '-q', '-m', 'inicial', `--date=@${old} +0000`);
+        extraEnv = [];
+        const solo = `${tmp}/solo`; // repo sin rama del ticket ni commits nuevos
+        sh(tmp, 'init', '-q', '-b', 'main', solo);
+        GLib.file_set_contents(`${solo}/c.txt`, '1');
+        sh(solo, 'add', '.');
+        extraEnv = [`GIT_COMMITTER_DATE=@${old} +0000`];
+        sh(solo, 'commit', '-q', '-m', 'inicial', `--date=@${old} +0000`);
+        extraEnv = [];
+        sh(repo2, 'switch', '-q', '-c', 'run-77-cards');
+        GLib.file_set_contents(`${repo2}/b.txt`, '2');
+        sh(repo2, 'commit', '-q', '-am', 'RUN-77: cards');
+        sh(repo2, 'switch', '-q', 'main');
+        const since2 = Math.floor(Date.now() / 1000) - 60;
+        eq(await findTicketWork(solo, 'RUN-77', since2), null, 'findTicketWork: nada en ningún sitio');
+        // por el transcript
+        const sid = 'sess-1';
+        const pdir = GLib.build_filenamev([CLAUDE_PROJECTS, solo.replace(/[^a-zA-Z0-9]/g, '-')]);
+        if (CLAUDE_PROJECTS.startsWith('/tmp') || CLAUDE_PROJECTS.startsWith(tmp) || GLib.get_home_dir().startsWith('/tmp')) {
+            GLib.mkdir_with_parents(pdir, 0o755);
+            GLib.file_set_contents(`${pdir}/${sid}.jsonl`, JSON.stringify({type: 'assistant', message: {content: [
+                {type: 'tool_use', name: 'Bash', input: {command: `cd ${repo2} && git switch -c run-77-cards`}}]}}) + '\n');
+            const tw = await findTicketWork(solo, 'RUN-77', since2, null, {sessionId: sid});
+            eq([tw?.repo, tw?.branch, tw?.commits.map(c => c.subject), tw?.pushed], [repo2, 'run-77-cards', ['RUN-77: cards'], false], 'findTicketWork: por transcript');
+        } else {
+            print('(sin HOME temporal: se omite la prueba de transcript)');
+        }
+        // por escaneo de repos conocidos (raíz con ambos repos)
+        const sw = await findTicketWork(solo, 'RUN-77', since2, null, {roots: [tmp]});
+        eq([sw?.repo, sw?.branch], [repo2, 'run-77-cards'], 'findTicketWork: por escaneo');
+        // la rama actual del cwd con commits nuevos (comportamiento previo)
+        const cw = await findTicketWork(repo, 'RUN-99', since);
+        eq([cw.repo, cw.branch], [repo, 'RUN-9-algo'], 'findTicketWork: rama actual del cwd');
+        eq((await findTicketWork(repo, 'RUN-9', since)).repo, repo, 'findTicketWork: rama del ticket en el cwd');
+    }
     print(`repo git temporal: ${repo}`);
 }
 

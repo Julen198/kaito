@@ -30,7 +30,7 @@ import {
 import {QuietController} from './dnd.js';
 import {PROVIDER_BY_ID} from './providers.js';
 import {quietLabel} from './quiet.js';
-import {detectWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
+import {findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
 import {fetchTransitions, applyTransition, pickTransition, REVIEW_RE, assignToMe, fetchMyself} from './jiradraft.js';
 import {ReminderManager} from './reminders.js';
 import {ReplyModal, CommentModal, TaskResultModal} from './reply.js';
@@ -699,7 +699,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const mins = Math.round(ms / 60000);
         let work = null;
         try {
-            work = await detectWork(a.cwdPath, Math.floor((since - SINCE_SLACK_MS) / 1000), this._cancellable);
+            work = await findTicketWork(a.cwdPath, a.ticket, Math.floor((since - SINCE_SLACK_MS) / 1000), this._cancellable,
+                {sessionId: a.id, roots: this._cfg.repoRoots});
         } catch (e) {
             console.warn(`kaito: git en ${a.cwdPath}: ${e.message}`);
         }
@@ -755,7 +756,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             id: key,
             agentId: a.id,
             title: `${a.ticket} listo`,
-            meta: `${a.cwd ?? '?'} · ${mins} min`,
+            meta: `${a.cwd ?? '?'}${work.repo !== a.cwdPath ? ` · en ${GLib.path_get_basename(work.repo)}` : ''} · ${mins} min`,
             lines: finishLines({work, moved, reason, lastText: a.lastText, remindAt}),
             prUrl: work.pushed ? prUrl(work.remote, work.branch) : null,
             onFocus: Number.isInteger(a.pid) ? () => this.focusAgent(a) : null,

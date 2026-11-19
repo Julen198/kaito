@@ -1,9 +1,10 @@
 // Cuando un agente lanzado con un ticket termina: ¿ha dejado commits? ¿está subida la rama?
 // Lógica pura (URL de PR, parseo, deduplicado, líneas de la tarjeta) + lectura de git sin shell.
 // Solo gi:// y módulos locales: se prueba con gjs (kaito.test.js).
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import {CACHE_DIR, readJson} from './common.js';
+import {CACHE_DIR, CLAUDE_PROJECTS, collectRepos, readJson, scanRepos} from './common.js';
 import {firstLine} from './agents.js';
 import {git} from './jiradraft.js';
 
@@ -122,23 +123,223 @@ export function finishLines({work, moved = null, reason = null, lastText = null,
 export const reviewReminderText = (key, summary) => (summary ? `Revisar ${key} · ${summary}` : `Revisar ${key}`);
 
 /**
- * Lee el estado git de `cwd` (argv, sin shell): {head, branch, commits, upstream, pushed, remote},
- * o null si no es un repo. commits = los de HEAD con fecha >= sinceS (epoch en segundos).
+ * Lee el estado git de `cwd` (argv, sin shell): {head, branch, commits, upstream, pushed, remote, ts},
+ * o null si no es un repo. commits = los de la rama con fecha >= sinceS (epoch en segundos).
+ * `branch` (opcional): rama local concreta en vez de HEAD. ts = fecha (epoch s) de su último commit.
  */
-export async function detectWork(cwd, sinceS, cancellable = null) {
+export async function detectWork(cwd, sinceS, cancellable = null, branch = null) {
     if (typeof cwd !== 'string' || !cwd.startsWith('/') || !GLib.file_test(cwd, GLib.FileTest.IS_DIR))
         return null;
-    const head = await git(cwd, ['rev-parse', 'HEAD'], cancellable);
+    const rev = branch ? `refs/heads/${branch}` : 'HEAD';
+    const head = await git(cwd, ['rev-parse', rev], cancellable);
     if (!head)
         return null;
-    const ref = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], cancellable);
+    const ref = branch ?? await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], cancellable);
     const log = await git(cwd, ['log', `--since=@${Math.floor(sinceS)}`, '--format=%h %s', '--no-merges',
-        `--max-count=${LOG_MAX}`, 'HEAD'], cancellable);
-    const upstream = await git(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], cancellable);
-    const ahead = upstream ? await git(cwd, ['rev-list', '--count', '@{u}..HEAD'], cancellable) : null;
+        `--max-count=${LOG_MAX}`, rev], cancellable);
+    const up = branch ? `${branch}@{u}` : '@{u}';
+    const upstream = await git(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', up], cancellable);
+    const ahead = upstream ? await git(cwd, ['rev-list', '--count', `${up}..${rev}`], cancellable) : null;
     const remote = await git(cwd, ['remote', 'get-url', 'origin'], cancellable);
+    const ts = Number(await git(cwd, ['log', '-1', '--format=%ct', rev], cancellable)) || 0;
     return {
         head, branch: ref && ref !== 'HEAD' ? ref : null, commits: parseLog(log),
-        upstream: upstream || null, pushed: !!upstream && ahead === '0', remote: remote || null,
+        upstream: upstream || null, pushed: !!upstream && ahead === '0', remote: remote || null, ts,
     };
+}
+
+// --- Dónde se hizo el trabajo: el agente puede haber cambiado de repo respecto a su cwd ---
+
+const TRANSCRIPT_MAX = 2 * 1024 * 1024;
+const REPOS_MAX = 40;
+const TRANSCRIPT_REPOS_MAX = 8;
+
+/** Puro. Rutas absolutas con las que trabajó el agente, de la más reciente a la más antigua. */
+export function pathsFromTranscript(text, home = GLib.get_home_dir()) {
+    const out = [];
+    const add = p => {
+        if (typeof p !== 'string')
+            return;
+        let q = p.trim();
+        if (q === '~' || q.startsWith('~/'))
+            q = home + q.slice(1);
+        if (q.startsWith('/') && !q.includes('\n') && q.length < 1024)
+            out.push(q);
+    };
+    const unq = t => t.replace(/^(["'])(.*)\1$/, '$2');
+    for (const line of String(text ?? '').split('\n')) {
+        if (!line.includes('tool_use'))
+            continue;
+        let o;
+        try {
+            o = JSON.parse(line);
+        } catch (_e) {
+            continue; // línea cortada
+        }
+        const parts = Array.isArray(o?.message?.content) ? o.message.content : [];
+        for (const c of parts) {
+            if (c?.type !== 'tool_use' || !c.input || typeof c.input !== 'object')
+                continue;
+            add(c.input.file_path);
+            add(c.input.notebook_path);
+            if (typeof c.input.command === 'string') {
+                const re = /(?:^|[;&|\s(])(?:cd|git\s+-C)\s+("[^"]+"|'[^']+'|[^\s;&|)]+)/g;
+                let m;
+                while ((m = re.exec(c.input.command)) !== null)
+                    add(unq(m[1]));
+            }
+        }
+    }
+    return [...new Set(out.reverse())];
+}
+
+/** Puro. Rutas → carpetas candidatas (un fichero → su carpeta), sin repetir ni anidar bajo otra ya vista. */
+export function dirsFromPaths(paths, isDir) {
+    const dirs = [];
+    for (const p of paths) {
+        let d = isDir(p) ? p : p.slice(0, p.lastIndexOf('/')) || '/';
+        for (let i = 0; i < 8 && d.length > 1 && !isDir(d); i++)
+            d = d.slice(0, d.lastIndexOf('/')) || '/';
+        d = d.replace(/\/+$/, '');
+        if (d.length > 1 && isDir(d) && !dirs.includes(d))
+            dirs.push(d);
+    }
+    return dirs;
+}
+
+/**
+ * Puro. Salida de `for-each-ref --format=%(refname:short) %(committerdate:unix)` → ramas cuyo nombre
+ * contiene `key` (sin mayúsculas) con último commit >= sinceS, el más reciente primero: [{branch, ts}].
+ */
+export function ticketBranches(text, key, sinceS) {
+    const k = String(key ?? '');
+    if (!k)
+        return [];
+    const re = new RegExp(`(?<![a-z0-9])${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`, 'i'); // RUN-5 no casa con RUN-50
+    const found = [];
+    for (const l of String(text ?? '').split('\n')) {
+        const i = l.lastIndexOf(' ');
+        if (i < 1)
+            continue;
+        const branch = l.slice(0, i).trim(), ts = Number(l.slice(i + 1));
+        if (Number.isFinite(ts) && ts >= sinceS && re.test(branch))
+            found.push({branch, ts});
+    }
+    return found.sort((a, b) => b.ts - a.ts);
+}
+
+async function readTranscript(path, cancellable) {
+    try {
+        const file = Gio.File.new_for_path(path);
+        const size = file.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null).get_size();
+        const stream = file.read(null);
+        try {
+            if (size > TRANSCRIPT_MAX)
+                stream.seek(size - TRANSCRIPT_MAX, GLib.SeekType.SET, null);
+            const bytes = await new Promise((resolve, reject) => stream.read_bytes_async(TRANSCRIPT_MAX, GLib.PRIORITY_DEFAULT, cancellable,
+                (s, res) => {
+                    try {
+                        resolve(s.read_bytes_finish(res));
+                    } catch (e) {
+                        reject(e);
+                    }
+                }));
+            const text = new TextDecoder().decode(bytes.toArray());
+            return size > TRANSCRIPT_MAX ? text.slice(text.indexOf('\n') + 1) : text;
+        } finally {
+            stream.close(null);
+        }
+    } catch (_e) {
+        return '';
+    }
+}
+
+let repoCache = null; // {t, list, roots}
+function knownRepos(roots) {
+    const now = GLib.get_monotonic_time() / 1e6;
+    if (!repoCache || now - repoCache.t > 300 || repoCache.roots !== JSON.stringify(roots)) {
+        let list = [];
+        try {
+            list = collectRepos(30, REPOS_MAX).map(r => r.path);
+            const seen = new Set(list);
+            for (const r of scanRepos(roots))
+                if (!seen.has(r.path))
+                    list.push(r.path);
+        } catch (e) {
+            console.warn(`kaito: repos: ${e.message}`);
+        }
+        repoCache = {t: now, list, roots: JSON.stringify(roots)};
+    }
+    return repoCache.list;
+}
+
+/** Mejor rama del ticket en `repo` con commits desde sinceS, o null. */
+async function ticketWorkIn(repo, key, sinceS, cancellable) {
+    const refs = await git(repo, ['for-each-ref', '--format=%(refname:short) %(committerdate:unix)', 'refs/heads'], cancellable);
+    for (const {branch} of ticketBranches(refs, key, sinceS)) {
+        const work = await detectWork(repo, sinceS, cancellable, branch);
+        if (work?.commits.length)
+            return work;
+    }
+    return null;
+}
+
+/**
+ * ¿Dónde trabajó el agente de `key`? Orden: cwd (ramas del ticket, o su rama actual con commits nuevos),
+ * repos del transcript (se para en el primero con rama del ticket) y, si nada, todos los repos conocidos.
+ * Devuelve {repo, ...detectWork} o null. `opts`: {sessionId, roots}.
+ */
+export async function findTicketWork(cwd, key, sinceS, cancellable = null, {sessionId = null, roots = []} = {}) {
+    const tried = new Set();
+    const ok = () => !cancellable?.is_cancelled();
+    const top = async dir => {
+        const t = await git(dir, ['rev-parse', '--show-toplevel'], cancellable);
+        return t && !tried.has(t) ? t : null;
+    };
+    let fallback = null;
+    if (typeof cwd === 'string' && cwd.startsWith('/')) {
+        const root = await top(cwd);
+        if (root) {
+            tried.add(root);
+            const w = await ticketWorkIn(root, key, sinceS, cancellable);
+            if (w)
+                return {repo: root, ...w};
+            const cur = await detectWork(cwd, sinceS, cancellable);
+            if (cur?.commits.length)
+                fallback = {repo: root, ...cur};
+        }
+    }
+    if (!ok())
+        return null;
+    if (sessionId && typeof cwd === 'string') {
+        const file = GLib.build_filenamev([CLAUDE_PROJECTS, cwd.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`]);
+        const isDir = p => GLib.file_test(p, GLib.FileTest.IS_DIR);
+        const dirs = dirsFromPaths(pathsFromTranscript(await readTranscript(file, cancellable)), isDir);
+        let n = 0;
+        for (const d of dirs) {
+            if (!ok() || n >= TRANSCRIPT_REPOS_MAX)
+                break;
+            const root = await top(d);
+            if (!root)
+                continue;
+            tried.add(root);
+            n++;
+            const w = await ticketWorkIn(root, key, sinceS, cancellable);
+            if (w)
+                return {repo: root, ...w};
+        }
+    }
+    if (fallback || !ok())
+        return fallback;
+    for (const r of knownRepos(roots).slice(0, REPOS_MAX)) {
+        if (!ok())
+            return null;
+        if (tried.has(r))
+            continue;
+        tried.add(r);
+        const w = await ticketWorkIn(r, key, sinceS, cancellable);
+        if (w)
+            return {repo: r, ...w};
+    }
+    return null;
 }

@@ -356,6 +356,11 @@ Cuando un agente con ticket deja de trabajar (o el hook marca "done"), Kaito mir
    **Entendido**. Sustituye al aviso normal de "terminó".
 3. Crea el recordatorio "Revisar <KEY> · <resumen>" a los `reviewReminderMinutes` (30; 0 = no).
 
+El trabajo se busca primero en el repo del agente y, si Claude se fue a otro, en los repos que aparecen
+en su transcript (`cd`, `git -C`, ficheros editados) y, por último, en todos los repos conocidos
+(máx. 40): vale una rama local con la clave del ticket y commits desde que empezó. La tarjeta
+indica el repo si no es el del agente.
+
 Una sola vez por sesión y HEAD (`~/.cache/kaito/finished.json`). Sin commits nuevos, queda el
 aviso normal (si trabajó 3 min o más).
 
