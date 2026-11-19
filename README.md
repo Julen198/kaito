@@ -40,10 +40,30 @@ Sube el número en `VERSION` (semver, p. ej. `0.2.0`), haz commit en `main` y et
 
 ## Requisitos
 
-- GNOME Shell 50 en Wayland (Fedora 44+ o Ubuntu con GNOME 50). Con otra versión GNOME ignora la
-  extensión (`shell-version` de `metadata.json`).
+- GNOME Shell 46–50 en Wayland (ver la tabla). Con otra versión GNOME ignora la extensión
+  (`shell-version` de `metadata.json`).
 - `python3`, `glib-compile-schemas` (Fedora: `glib2-devel`; Ubuntu: `libglib2.0-bin`) y `gnome-extensions`.
 - Opcionales: `secret-tool` (`libsecret` / `libsecret-tools`) y la CLI `claude` (borradores de Jira y agentes).
+
+### Compatibilidad
+
+| Distribución | GNOME Shell | Estado |
+|---|---|---|
+| Fedora 44 | 50 | Probado (sesión real) |
+| Fedora 43 | 49 | Soportado (49 probado en Ubuntu 25.10) |
+| Fedora 42 | 48 | Soportado (48 probado en Debian 13) |
+| Fedora 41 | 47 | Soportado (47 inferido: sin imagen de prueba, APIs iguales a 46 y 48) |
+| Fedora 40 | 46 | Soportado (46 probado en Ubuntu 24.04) |
+| Ubuntu 26.04 LTS | 50 | Soportado |
+| Ubuntu 25.10 | 49 | Probado (contenedor) |
+| Ubuntu 25.04 | 48 | Soportado (48 probado en Debian 13; Ubuntu 25.04 ya sin soporte) |
+| Ubuntu 24.04 LTS | 46 | Probado (contenedor) |
+| Debian 13 (trixie) | 48 | Probado (contenedor) |
+| Debian 12 (bookworm) | 43 | **No soportado** (GNOME 43 no tiene extensiones ESM) |
+
+"Probado (contenedor)": `tests/compat/run.sh <46|48|49|all>` arranca gnome-shell headless en podman,
+comprueba que Kaito queda ACTIVE sin errores, ejecuta una autoprueba de la interfaz (menú, captura,
+tarjetas, notificación, modales, recarga en caliente), los tests de GJS y carga las preferencias.
 
 ## Instalación manual
 
@@ -118,7 +138,8 @@ y se recarga solo al reabrir Ajustes.
 - **No aparece en la barra**: cierra sesión y vuelve a entrar; `gnome-extensions list | grep kaito`;
   `gsettings get org.gnome.shell disable-user-extensions` debe ser `false`.
 - **Errores**: `journalctl --user -b | grep -i kaito` (o `journalctl -f -o cat /usr/bin/gnome-shell`).
-- **GNOME distinto de 50**: añade tu versión a `shell-version` en `metadata.json` (sin garantías).
+- **GNOME fuera de 46–50**: añade tu versión a `shell-version` en `metadata.json` (sin garantías;
+  antes de 45 no funciona: Kaito usa módulos ES).
 - **No salen agentes**: reinicia `claude` y comprueba que `~/.cache/kaito/state/` se llena.
 
 ### Privacidad

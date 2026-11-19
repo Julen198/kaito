@@ -1,0 +1,14 @@
+# Entorno mínimo para arrancar gnome-shell headless (Wayland, monitor virtual) y probar Kaito.
+# BASE: docker.io/library/ubuntu:24.04 (GNOME 46), debian:trixie (48), ubuntu:25.10 (49).
+ARG BASE=docker.io/library/ubuntu:24.04
+FROM ${BASE}
+# Réplica de Ubuntu opcional (p. ej. http://mirrors.edge.kernel.org/ubuntu/) si archive.ubuntu.com no responde.
+ARG UBUNTU_MIRROR=
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+RUN if [ -n "$UBUNTU_MIRROR" ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+        sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#$UBUNTU_MIRROR#" /etc/apt/sources.list.d/ubuntu.sources; fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        gnome-shell gnome-shell-extension-prefs gjs dbus dbus-daemon libglib2.0-bin \
+        gir1.2-soup-3.0 gir1.2-secret-1 gir1.2-adw-1 gir1.2-gtk-4.0 \
+        gsettings-desktop-schemas librsvg2-common libgl1-mesa-dri python3 git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*

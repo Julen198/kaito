@@ -100,8 +100,8 @@ if [ -n "$auto" ]; then ok "terminal 'auto' para mandar tickets a Claude: ${auto
 else warn "ninguna terminal compatible (ptyxis, gnome-terminal, kgx o warp): no se podrán mandar tickets a Claude"; fi
 if command -v gnome-shell >/dev/null 2>&1; then
   ver="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -n1 || true)"
-  if [ "$ver" = 50 ]; then ok "GNOME Shell $ver"; else
-    warn "GNOME Shell ${ver:-desconocido}: Kaito declara shell-version [\"50\"]. Con otra versión GNOME la ignorará;"
+  if [ -n "$ver" ] && [ "$ver" -ge 46 ] && [ "$ver" -le 50 ]; then ok "GNOME Shell $ver (soportado: 46–50)"; else
+    warn "GNOME Shell ${ver:-desconocido}: Kaito soporta 46–50 (shell-version de metadata.json). Con otra versión GNOME la ignorará;"
     warn "  puedes probar añadiendo tu versión a metadata.json (sin garantías)."
   fi
 else

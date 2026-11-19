@@ -1,0 +1,1 @@
+{"uuid": "selftest@kaito", "name": "Kaito selftest", "description": "Solo para tests/compat: ejercita la UI de Kaito con datos falsos.", "shell-version": ["46", "47", "48", "49", "50"]}

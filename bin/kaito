@@ -168,6 +168,9 @@ cmd_doctor() {
       if [ "$(gsettings get org.gnome.shell disable-user-extensions 2>/dev/null)" = "false" ]; then ok "disable-user-extensions = false"
       else bad "disable-user-extensions está activado (gsettings set org.gnome.shell disable-user-extensions false)"; fi
     else bad "gsettings no encontrado"; fi
+    local ver; ver="$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+' | head -n1 || true)"
+    if [ -n "$ver" ] && [ "$ver" -ge 46 ] && [ "$ver" -le 50 ]; then ok "GNOME Shell $ver (soportado: 46–50)"
+    else warn "GNOME Shell ${ver:-desconocido}: Kaito soporta 46–50; con otra versión GNOME no la carga (shell-version de metadata.json)"; fi
   fi
   local rc=0
   python3 "$KAITO_HOME/hooks/merge-settings.py" install --settings "$HOME/.claude/settings.json" >/dev/null 2>&1 || rc=$?
