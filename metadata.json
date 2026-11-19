@@ -1,7 +1,7 @@
 {
   "uuid": "kaito@runnea",
   "name": "Kaito",
-  "description": "Agentes de Claude Code activos, issues de Jira y pendientes en la barra superior.",
+  "description": "Tus agentes de Claude Code, tickets de Jira, recordatorios y tareas programadas en la barra superior.",
   "shell-version": [
     "46",
     "47",

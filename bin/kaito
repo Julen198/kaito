@@ -160,7 +160,7 @@ cmd_doctor() {
       local inf; inf="$(gnome-extensions info "$UUID" 2>&1 || true)"
       if grep -q 'Estado\|State' <<<"$inf"; then
         local st; st="$(grep -iE 'Estado|State' <<<"$inf" | head -n1 | sed 's/^ *//')"
-        if grep -qiE 'enabled|habilitad|activad' <<<"$st" && ! grep -qiE 'disabled|deshabilitad|desactivad' <<<"$st"; then ok "extensión instalada y activa ($st)"
+        if grep -qE ':[[:space:]]*(ACTIVE|ENABLED)[[:space:]]*$' <<<"$st"; then ok "extensión instalada y activa ($st)"
         else bad "extensión instalada pero no activa ($st). Cierra sesión y vuelve a entrar."; fi
       else bad "gnome-extensions no conoce $UUID (¿primera vez? cierra sesión y vuelve a entrar)"; fi
     else bad "gnome-extensions no encontrado"; fi
