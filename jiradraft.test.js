@@ -230,6 +230,7 @@ eq(pickReadyTransition([rt('7', 'por hacer')], '').id, '7', 'ready: minúsculas'
 eq(pickReadyTransition([rt('8', 'Haciendo'), rt('9', 'Por Asignar'), rt('10', 'Por hacerlo')], 'x'), null, 'ready: ninguna');
 eq(pickReadyTransition(null, 'x'), null, 'ready: sin transiciones');
 eq(pickReadyTransition([rt('11', 'Backlog')], '', readyRegex('^backlog')).id, '11', 'ready: regex configurable');
+eq(pickReadyTransition([rt('411', 'Backlog Marketing'), rt('21', 'Por Hacer Desarrollo')], 'Marketing').id, '411', 'ready: Backlog <Departamento> por defecto');
 eq(readyRegex('(').test('Por Hacer X'), true, 'readyRegex inválida -> por defecto');
 
 print(`OK ${n} aserciones`);

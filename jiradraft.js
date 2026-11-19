@@ -557,7 +557,7 @@ export function pickTransition(transitions, kind) {
     return null;
 }
 
-export const READY_RE = /^(por hacer\b|to ?do$)/i;
+export const READY_RE = /^(por hacer\b|backlog\b|to ?do$)/i;
 
 /** Puro. RegExp de estado "listo" desde un texto de config (regex, sin distinguir mayúsculas); por defecto READY_RE. */
 export function readyRegex(text) {
