@@ -1,7 +1,12 @@
 # Kaito
 
-Extensión de GNOME Shell 50 (Wayland) que reúne en la barra superior tus agentes de Claude Code,
-tus tickets de Jira, pendientes, notas, recordatorios y tareas programadas de Claude.
+Kaito reúne en la barra del sistema tus agentes de Claude Code, tus tickets de Jira, pendientes,
+notas, recordatorios y tareas programadas de Claude.
+
+| Plataforma | Estado |
+|---|---|
+| Linux con GNOME (extensión de GNOME Shell) | Disponible |
+| macOS (app de barra de menú) | En preparación |
 
 ## Instalar
 
