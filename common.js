@@ -102,10 +102,21 @@ export function defaultRepoRoots(home = GLib.get_home_dir(), isDir = p => GLib.f
     return found.length ? found : [GLib.build_filenamev([home, 'Documentos'])];
 }
 
+/** Puro. "gembiratech" → https://gembiratech.atlassian.net; añade https:// y quita barras finales. */
+export function normalizeJiraUrl(v) {
+    let s = String(v ?? '').trim().replace(/\/+$/, '');
+    if (!s)
+        return '';
+    if (!/^https?:\/\//i.test(s))
+        s = `https://${s.includes('.') ? s : `${s}.atlassian.net`}`;
+    return s;
+}
+
 /** Config con valores por defecto aplicados (numéricos validados). */
 export function readConfig() {
     const raw = readJson(CONFIG_PATH, {}) ?? {};
     const cfg = {...raw};
+    cfg.jiraBaseUrl = normalizeJiraUrl(raw.jiraBaseUrl);
     for (const [k, d] of Object.entries(DEFAULTS)) {
         const n = Number(raw[k]);
         cfg[k] = Number.isFinite(n) && n > 0 ? n : d;

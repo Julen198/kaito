@@ -615,4 +615,11 @@ if (GLib.get_user_config_dir().startsWith('/tmp') || CONFIG_PATH.includes('/scra
     print('(sin XDG temporales: se omiten las pruebas de config 0.4)');
 }
 
+// URL de Jira escrita a medias en Ajustes
+{
+    const {normalizeJiraUrl: nj} = await import('./common.js');
+    for (const [a, b] of [['gembiratech', 'https://gembiratech.atlassian.net'], [' gembiratech.atlassian.net/ ', 'https://gembiratech.atlassian.net'], ['https://x.atlassian.net/', 'https://x.atlassian.net'], ['', '']])
+        if (nj(a) !== b) throw new Error(`normalizeJiraUrl(${a}) = ${nj(a)}`);
+}
+
 print(`kaito.test.js: ${n} comprobaciones OK`);
