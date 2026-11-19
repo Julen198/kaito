@@ -13,3 +13,8 @@ tmp/
 # Python
 __pycache__/
 *.pyc
+
+# macOS (Swift)
+macos/.build/
+macos/build/
+macos/.swiftpm/

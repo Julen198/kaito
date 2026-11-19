@@ -6,7 +6,7 @@ notas, recordatorios y tareas programadas de Claude.
 | Plataforma | Estado |
 |---|---|
 | Linux con GNOME (extensión de GNOME Shell) | Disponible |
-| macOS (app de barra de menú) | En preparación |
+| macOS 14+ (app de barra de menús, Apple Silicon e Intel) | Primera versión ([ver abajo](#macos)) |
 
 ## Instalar
 
@@ -37,6 +37,57 @@ El bootstrap clona, ejecuta `install.sh` y deja el comando `kaito` en `~/.local/
 
 Sube el número en `VERSION` (semver, p. ej. `0.2.0`), haz commit en `main` y etiqueta `git tag v0.2.0 && git push --tags`.
 `kaito update` detecta cualquier commit nuevo en la rama; `VERSION` es lo que se muestra al usuario.
+La etiqueta `v*` lanza además `.github/workflows/macos.yml`, que compila la app universal de macOS y sube
+`Kaito-macOS.zip` a la release de GitHub (la etiqueta debe coincidir con `VERSION`).
+
+## macOS
+
+Kaito para macOS es una app de barra de menús (SwiftUI, macOS 14 Sonoma o posterior, Apple Silicon e Intel)
+que usa los mismos ficheros que la versión de Linux: `~/.config/kaito/{config,todos,notes,reminders}.json`,
+los estados de los hooks en `~/.cache/kaito/state/` y los prompts en `~/.cache/kaito/prompts/`.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Julen198/kaito/main/macos/install-mac.sh | bash
+```
+
+El instalador descarga `Kaito-macOS.zip` de la última release, lo deja en `~/Applications/Kaito.app`, quita la
+cuarentena (`xattr -dr com.apple.quarantine`), descarga el código de esa release en `~/.local/share/kaito-src`
+para instalar los hooks de Claude Code en `~/.claude/settings.json` (con `hooks/merge-settings.py`, igual que en
+Linux; pregunta antes y hace copia) y abre la app. Opciones: `--yes`, `--no-hooks`, `--version vX.Y.Z`.
+
+- **Actualizar:** `kaito update` (el instalador deja un comando `kaito` en `~/.local/bin` con `update`, `version`
+  y `uninstall`) o, cuando hay versión nueva, el botón **Actualizar** del menú (mira GitHub como mucho cada 6 h).
+- **Qué hace:** icono con contadores (agentes trabajando o que te necesitan · tickets de Jira · pendientes);
+  secciones Agentes (Claude por su registro de sesiones y hooks; Codex, Gemini, Aider… por `ps`/`lsof`),
+  Jira (pestañas Mías / Sin asignar / Sprint / Recientes, prioridad, cambiar estado, Asignarme, abrir en el
+  navegador, **Mandar a Claude** con selector de repo), Pendientes, Recordatorios y Notas; Ajustes con el token
+  en el llavero de macOS (servicio `kaito-jira`).
+- **Ir a la terminal de un agente:** clic en la fila. En Terminal e iTerm2 se selecciona la pestaña exacta
+  (por el `tty` del proceso); en Warp y otras se activa la app.
+- **Mandar a Claude:** abre una ventana de Terminal o una pestaña de iTerm2 (`terminal` en Ajustes: automática,
+  Terminal, iTerm2 o Warp, este con una launch configuration en `~/.warp/launch_configurations`).
+- **Captura rápida:** ⌃⌥Espacio (configurable) abre un panel tipo Spotlight con Nota, Recordatorio (mismo
+  lenguaje que en Linux: «llamar a Iker en 20 min», «mañana a las 9») y Jira (borrador con `claude -p` como en
+  Linux; revisas y creas). Ojo: si tienes varias distribuciones de teclado, macOS usa ⌃⌥Espacio para cambiar
+  de fuente de entrada; elige otro atajo en Ajustes.
+- **Recordatorios:** tarjeta flotante arriba en el centro, en todos los escritorios, con sonido, «Posponer 10 min»
+  y «Hecho».
+
+Permisos que pedirá macOS:
+
+- **Automatización** (Terminal / iTerm2), la primera vez que vas a la terminal de un agente o mandas un ticket a
+  Claude. Si lo deniegas, se puede volver a dar en Ajustes del Sistema > Privacidad y seguridad > Automatización.
+- **Notificaciones** (opcional): avisos de recordatorios y tickets creados.
+- **Llavero:** tras cada actualización la app firmada ad hoc es «otra» para el llavero y puede preguntar si
+  Kaito puede leer el token de Jira: responde «Permitir siempre».
+
+Gatekeeper: la app no está notarizada (firma ad hoc). El instalador quita la cuarentena; si aun así macOS dice que
+no se puede abrir, haz **clic derecho > Abrir** en `~/Applications/Kaito.app` la primera vez (o Ajustes del Sistema
+> Privacidad y seguridad > «Abrir igualmente»).
+
+Desarrollo: `macos/` es un paquete Swift (`KaitoCore`, solo Foundation y con tests; `KaitoApp`, la app).
+`cd macos && swift test` (también en Linux: `podman run --rm -v "$PWD":/src:Z -w /src swift:6.0 swift test`) y
+`./build-app.sh` (en un Mac con Xcode) genera `build/Kaito.app` y `build/Kaito-macOS.zip`.
 
 ## Requisitos
 
