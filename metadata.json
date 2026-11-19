@@ -1,0 +1,10 @@
+{
+  "uuid": "kaito@runnea",
+  "name": "Kaito",
+  "description": "Agentes de Claude Code activos, issues de Jira y pendientes en la barra superior.",
+  "shell-version": [
+    "50"
+  ],
+  "version": 1,
+  "settings-schema": "org.gnome.shell.extensions.kaito"
+}

@@ -1,0 +1,15 @@
+# Compilado por install.sh
+schemas/gschemas.compiled
+
+# Copias de seguridad y temporales
+*.bak
+*.bak-*
+*.tmp
+*.swp
+*~
+.settings-kaito-*
+tmp/
+
+# Python
+__pycache__/
+*.pyc

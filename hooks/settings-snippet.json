@@ -1,0 +1,82 @@
+{
+  "_comment": "Plantilla: install.sh (hooks/merge-settings.py) sustituye __KAITO_HOOKS_DIR__ por la ruta de esta máquina y lo fusiona en ~/.claude/settings.json. No lo pegues a mano sin cambiar la ruta.",
+  "statusLine": {
+    "type": "command",
+    "command": "__KAITO_HOOKS_DIR__/kaito-statusline.py"
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py",
+            "timeout": 150
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__KAITO_HOOKS_DIR__/kaito-hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}

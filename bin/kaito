@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# CLI de Kaito: update, version, check, doctor, uninstall.
+set -uo pipefail
+
+UUID="kaito@runnea"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+KAITO_HOME="$(cd "$(dirname "$SELF")/.." && pwd)"
+TEST="${KAITO_TEST:-0}"
+
+info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
+bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
+die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+
+g() { git -C "$KAITO_HOME" "$@"; }
+need_git() { [ -d "$KAITO_HOME/.git" ] || die "$KAITO_HOME no es un checkout de git; reinstala con bootstrap.sh."; }
+version() { tr -d '[:space:]' < "$KAITO_HOME/VERSION" 2>/dev/null || echo desconocida; }
+
+# git de red que nunca pregunta ni se cuelga
+netgit() {
+  local t=()
+  command -v timeout >/dev/null 2>&1 && t=(timeout 10)
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
+  GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=8}" \
+  GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=8 \
+    "${t[@]}" git -C "$KAITO_HOME" "$@"
+}
+
+usage() {
+  cat <<USO
+Uso: kaito <comando>
+  update [--yes] [--force]   actualiza Kaito a la última versión
+  version                    versión instalada
+  check [--json]             ¿hay versión nueva? (rápido, silencioso sin red)
+  doctor                     diagnóstico de la instalación
+  uninstall [--purge] [--yes] desinstala (con --purge borra también el código y los datos)
+  help                       esta ayuda
+USO
+}
+
+# Terminal que elegiría terminal='auto' (mismo orden que common.js resolveTerminal) y nivel de foco.
+# Imprime "nombre|nivel"; vacío si no hay ninguna.
+auto_terminal() {
+  local v="" pv="" pn=""
+  if command -v ptyxis >/dev/null 2>&1; then
+    pn="Ptyxis"; v="$(ptyxis --version 2>/dev/null | grep -oE '[0-9]+' | head -n1 || true)"
+  elif command -v flatpak >/dev/null 2>&1 && flatpak info app.devsuite.Ptyxis >/dev/null 2>&1; then
+    pn="Ptyxis (flatpak)"; v="$(flatpak info app.devsuite.Ptyxis 2>/dev/null | grep -iE '^ *(versión|version):' | grep -oE '[0-9]+' | head -n1 || true)"
+  fi
+  if [ -n "$pn" ] && [ "${v:-0}" -ge 52 ]; then echo "$pn ${v}|pestaña exacta"
+  elif command -v gnome-terminal >/dev/null 2>&1; then echo "GNOME Terminal|pestaña exacta"
+  elif command -v warp-terminal >/dev/null 2>&1; then echo "Warp|pestaña nueva en la ventana; volver al agente: solo ventana"
+  elif [ -n "$pn" ]; then echo "$pn ${v:-?}|solo ventana (Ptyxis < 52 no exporta PTYXIS_TAB)"
+  elif command -v kgx >/dev/null 2>&1; then echo "Consola (kgx)|solo ventana"
+  fi
+}
+# Valor de "terminal" en config.json ('auto' si no está).
+configured_terminal() {
+  python3 -c 'import json,os,sys
+p=os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),"kaito","config.json")
+try: t=json.load(open(p)).get("terminal")
+except Exception: t=None
+print(t if t in ("auto","ptyxis","gnome-terminal","kgx","warp","warp-window") else "auto")' 2>/dev/null || echo auto
+}
+
+behind_count() { g rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0; }
+
+cmd_version() {
+  need_git
+  local sha date
+  sha="$(g rev-parse --short HEAD 2>/dev/null || echo '?')"
+  date="$(g log -1 --format=%cs 2>/dev/null || echo '?')"
+  echo "Kaito $(version) ($sha, $date)"
+}
+
+cmd_check() {
+  local json=0; [ "${1:-}" = "--json" ] && json=1
+  need_git
+  local cur latest behind err=0
+  cur="$(version)"
+  netgit fetch --quiet origin >/dev/null 2>&1 || err=1
+  if [ "$err" = 1 ]; then
+    if [ "$json" = 1 ]; then printf '{"current":"%s","latest":null,"behind":0,"error":"fetch"}\n' "$cur"
+    else echo "no se pudo comprobar"; fi
+    return 0
+  fi
+  behind="$(behind_count)"
+  latest="$(g show '@{u}:VERSION' 2>/dev/null | tr -d '[:space:]')"; latest="${latest:-$cur}"
+  if [ "$json" = 1 ]; then printf '{"current":"%s","latest":"%s","behind":%s}\n' "$cur" "$latest" "$behind"
+  elif [ "$behind" -gt 0 ]; then echo "hay versión nueva: $latest"
+  else echo "al día"; fi
+  return 0
+}
+
+cmd_update() {
+  local yes=() force=0
+  for a in "$@"; do case "$a" in -y|--yes) yes=(--yes) ;; --force) force=1 ;; *) die "Opción desconocida: $a" ;; esac; done
+  need_git
+  local dirty; dirty="$(g status --porcelain --untracked-files=no)"
+  if [ -n "$dirty" ]; then
+    if [ "$force" = 0 ]; then
+      bad "El checkout tiene cambios locales; no se actualiza:"
+      echo "$dirty" | sed 's/^/     /'
+      echo "  Usa 'kaito update --force' (los guarda con git stash) o descártalos."
+      exit 1
+    fi
+    g stash push -m "kaito update $(date +%F-%H%M%S)" >/dev/null || die "No se pudo hacer git stash."
+    warn "Cambios locales guardados con git stash."
+  fi
+  info "Buscando actualizaciones"
+  GIT_TERMINAL_PROMPT=0 g fetch --quiet origin || die "No se pudo contactar con el repositorio (¿red / acceso?)."
+  local behind; behind="$(behind_count)"
+  if [ "$behind" = 0 ]; then ok "Ya tienes la última versión ($(version))"; return 0; fi
+  echo "  Cambios nuevos ($behind):"
+  g log --oneline -n 15 'HEAD..@{u}' | sed 's/^/     /'
+  [ "$behind" -gt 15 ] && echo "     … y $((behind - 15)) más"
+  g pull --ff-only --quiet || die "git pull --ff-only falló (historia divergente)."
+  info "Reinstalando"
+  "$KAITO_HOME/install.sh" --no-statusline ${yes[@]+"${yes[@]}"} || die "install.sh falló."
+  chmod +x "$KAITO_HOME/bin/kaito" 2>/dev/null || true
+  echo
+  ok "Actualizado a $(version). Cierra sesión y vuelve a entrar para cargar la nueva versión (Wayland)."
+}
+
+cmd_doctor() {
+  info "Diagnóstico de Kaito $(version)"
+  local n=0
+  if [ "$TEST" = 1 ]; then warn "KAITO_TEST=1: se omiten gnome-extensions/gsettings/journalctl."
+  else
+    if command -v gnome-extensions >/dev/null 2>&1; then
+      local inf; inf="$(gnome-extensions info "$UUID" 2>&1 || true)"
+      if grep -q 'Estado\|State' <<<"$inf"; then
+        local st; st="$(grep -iE 'Estado|State' <<<"$inf" | head -n1 | sed 's/^ *//')"
+        if grep -qiE 'enabled|habilitad|activad' <<<"$st" && ! grep -qiE 'disabled|deshabilitad|desactivad' <<<"$st"; then ok "extensión instalada y activa ($st)"
+        else bad "extensión instalada pero no activa ($st). Cierra sesión y vuelve a entrar."; fi
+      else bad "gnome-extensions no conoce $UUID (¿primera vez? cierra sesión y vuelve a entrar)"; fi
+    else bad "gnome-extensions no encontrado"; fi
+    if command -v gsettings >/dev/null 2>&1; then
+      if [ "$(gsettings get org.gnome.shell disable-user-extensions 2>/dev/null)" = "false" ]; then ok "disable-user-extensions = false"
+      else bad "disable-user-extensions está activado (gsettings set org.gnome.shell disable-user-extensions false)"; fi
+    else bad "gsettings no encontrado"; fi
+  fi
+  local rc=0
+  python3 "$KAITO_HOME/hooks/merge-settings.py" install --settings "$HOME/.claude/settings.json" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    10) ok "hooks de Claude Code instalados en ~/.claude/settings.json" ;;
+    0)  bad "hooks ausentes o con otra ruta: ejecuta $KAITO_HOME/install.sh" ;;
+    *)  bad "no se pudo comprobar ~/.claude/settings.json" ;;
+  esac
+  if command -v python3 >/dev/null 2>&1; then ok "python3 $(python3 -c 'import platform;print(platform.python_version())')"; else bad "python3 no encontrado"; fi
+  if command -v claude >/dev/null 2>&1; then ok "claude: $(command -v claude)"
+  elif [ -x "$HOME/.local/bin/claude" ]; then ok "claude: $HOME/.local/bin/claude"
+  else bad "CLI claude no encontrada (necesaria para borradores de Jira y agentes)"; fi
+  if command -v secret-tool >/dev/null 2>&1; then
+    if secret-tool lookup service jira >/dev/null 2>&1; then ok "token de Jira presente en el llavero"
+    else bad "sin token de Jira en el llavero (Ajustes de Kaito)"; fi
+  else bad "secret-tool no encontrado (libsecret)"; fi
+  local auto conf
+  auto="$(auto_terminal)"; conf="$(configured_terminal)"
+  if [ -n "$auto" ]; then ok "terminal 'auto': ${auto%%|*} · volver al agente: ${auto#*|}"
+  else bad "ningún terminal compatible para 'auto' (ptyxis/gnome-terminal/kgx/warp)"; fi
+  [ "$conf" = auto ] || warn "terminal configurado en Ajustes: $conf (no 'auto')"
+  if [ "$TEST" != 1 ] && command -v journalctl >/dev/null 2>&1; then
+    echo; info "Últimas líneas de kaito en el journal"
+    journalctl --user -b --no-pager 2>/dev/null | grep -i kaito | tail -n 10 | sed 's/^/     /' || true
+  fi
+  return 0
+}
+
+cmd_uninstall() {
+  local pass=() purge=0
+  for a in "$@"; do case "$a" in --purge) purge=1; pass+=(--purge) ;; -y|--yes) pass+=(--yes) ;; *) die "Opción desconocida: $a" ;; esac; done
+  [ -x "$KAITO_HOME/uninstall.sh" ] || die "No encuentro $KAITO_HOME/uninstall.sh"
+  "$KAITO_HOME/uninstall.sh" ${pass[@]+"${pass[@]}"} || exit $?
+  local link="$HOME/.local/bin/kaito"
+  if [ -L "$link" ] && [ "$(readlink -f "$link")" = "$SELF" ]; then rm -f "$link"; ok "Comando kaito quitado ($link)"; fi
+  if [ "$purge" = 1 ]; then
+    case "$KAITO_HOME" in "$HOME"/*) rm -rf "$KAITO_HOME"; ok "Código borrado ($KAITO_HOME)" ;; *) warn "No borro $KAITO_HOME (fuera de \$HOME)" ;; esac
+  else echo "  Código conservado en $KAITO_HOME (usa --purge para borrarlo)."; fi
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  update) cmd_update "$@" ;;
+  version|-v|--version) cmd_version ;;
+  check) cmd_check "$@" ;;
+  doctor) cmd_doctor ;;
+  uninstall) cmd_uninstall "$@" ;;
+  help|-h|--help) usage ;;
+  *) echo "Comando desconocido: $cmd" >&2; usage >&2; exit 2 ;;
+esac

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.kaito" path="/org/gnome/shell/extensions/kaito/">
+    <key name="capture-shortcut" type="as">
+      <default>['&lt;Control&gt;&lt;Alt&gt;space']</default>
+      <summary>Atajo de captura rápida</summary>
+      <description>Abre el cuadro para crear una nota o un recordatorio.</description>
+    </key>
+  </schema>
+</schemalist>

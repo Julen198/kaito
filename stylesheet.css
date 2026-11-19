@@ -1,0 +1,153 @@
+.kaito-menu { width: 420px; }
+.kaito-panel { spacing: 10px; }
+.kaito-seg { spacing: 4px; }
+.kaito-icon { icon-size: 15px; }
+.kaito-dot { width: 7px; height: 7px; border-radius: 4px; margin-right: 0; }
+.kaito-count { font-weight: bold; }
+
+.kaito-row { spacing: 8px; padding: 5px 12px; }
+.kaito-content { spacing: 8px; }
+.kaito-header { padding: 10px 12px 2px 12px; }
+.kaito-header-text { font-size: 0.85em; font-weight: bold; color: rgba(255,255,255,0.55); }
+.kaito-muted { color: rgba(255,255,255,0.55); }
+.kaito-action { margin-left: 15px; font-size: 0.92em; }
+.kaito-repo { font-weight: bold; color: #ffffff; margin-left: 8px; }
+
+.kaito-summary, .kaito-todo-text { color: #ffffff; }
+.kaito-key { font-family: "Adwaita Mono"; color: #78AEED; }
+.kaito-pill { padding: 1px 8px; border-radius: 999px; font-size: 0.8em; }
+.kaito-pill-new { background-color: rgba(255,255,255,0.12); }
+.kaito-pill-progress { background-color: rgba(120,174,237,0.25); }
+.kaito-pill-done { background-color: rgba(91,200,175,0.25); }
+
+.kaito-circle { width: 12px; height: 12px; border: 1.5px solid #F5C211; border-radius: 7px; }
+.kaito-todo:hover .kaito-circle, .kaito-todo:focus .kaito-circle { background-color: #F5C211; }
+
+.kaito-entry { background-color: rgba(255,255,255,0.06); border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; margin-top: 6px; }
+.kaito-entry:focus { border-color: rgba(120,174,237,0.6); }
+
+.kaito-settings { color: rgba(255,255,255,0.55); font-size: 0.92em; }
+
+/* Agentes que te necesitan */
+.kaito-pill-needs { margin-left: 8px; background-color: rgba(255,163,72,0.25); color: #FFA348; font-weight: bold; }
+.kaito-needs-msg { color: rgba(255,255,255,0.85); }
+.kaito-attention { background-color: rgba(255,163,72,0.25); border-radius: 999px; }
+
+/* Tarjeta fija */
+.kaito-pinned { width: 380px; color: #ffffff; background-color: rgba(54,54,58,0.94); border-radius: 16px; padding: 8px 4px 10px 4px; box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
+.kaito-card-head { padding: 2px 12px 0 12px; spacing: 8px; }
+.kaito-card-close { padding: 4px; border-radius: 999px; color: rgba(255,255,255,0.55); }
+.kaito-card-close:hover, .kaito-card-close:focus { background-color: rgba(255,255,255,0.12); color: #ffffff; }
+.kaito-card-btn { border-radius: 8px; }
+.kaito-card-btn:hover, .kaito-card-btn:focus { background-color: rgba(255,255,255,0.08); }
+
+/* Captura rápida */
+.kaito-capture-overlay { background-color: rgba(0,0,0,0.25); }
+.kaito-capture { background-color: #36363a; color: #ffffff; border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,0.65); }
+.kaito-capture-top { padding: 14px 16px 0 16px; spacing: 6px; }
+.kaito-tab { padding: 6px 12px; border-radius: 10px; color: rgba(255,255,255,0.6); background-color: transparent; }
+.kaito-tab:hover { background-color: rgba(255,255,255,0.06); }
+.kaito-tab.selected { background-color: #4a4a50; color: #ffffff; }
+.kaito-capture-tab-content { spacing: 8px; }
+.kaito-capture-muted { color: rgba(255,255,255,0.5); }
+.kaito-capture-entry { font-size: 24px; color: #ffffff; background-color: transparent; border: none; box-shadow: none; padding: 16px 24px 22px 24px; caret-color: #ffffff; selection-background-color: rgba(120,174,237,0.5); }
+.kaito-capture-entry:focus { background-color: transparent; border: none; box-shadow: none; }
+.kaito-capture-entry StLabel.hint-text { color: rgba(255,255,255,0.4); }
+.kaito-capture-footer { background-color: #2e2e32; border-top: 1px solid rgba(255,255,255,0.08); border-radius: 0 0 18px 18px; padding: 11px 16px; spacing: 10px; }
+.kaito-capture-footer.warn { background-color: rgba(255,163,72,0.35); }
+.kaito-capture-footer-left { spacing: 8px; font-size: 0.92em; }
+.kaito-capture-clock { color: #F5C211; }
+.kaito-capture-clock-off { color: rgba(255,255,255,0.4); }
+.kaito-capture-when { color: #F5C211; font-weight: bold; }
+.kaito-capture-clean { font-size: 0.95em; }
+.kaito-capture-key { spacing: 6px; }
+.kaito-capture-cap { font-size: 0.8em; color: rgba(255,255,255,0.8); background-color: rgba(255,255,255,0.1); border-radius: 5px; padding: 1px 6px; }
+
+/* Recordatorios vencidos */
+.kaito-reminders { spacing: 10px; }
+.kaito-reminder { spacing: 14px; padding: 16px 18px; background-color: #36363a; color: #ffffff; border: 2px solid #F5C211; border-radius: 18px; box-shadow: 0 12px 36px rgba(0,0,0,0.55); }
+.kaito-reminder-icon { width: 40px; height: 40px; border-radius: 20px; background-color: rgba(245,194,17,0.18); color: #F5C211; }
+.kaito-reminder-col { spacing: 4px; }
+.kaito-reminder-meta { color: #F5C211; font-size: 0.85em; font-weight: bold; }
+.kaito-reminder-title { font-size: 20px; font-weight: bold; }
+.kaito-reminder-buttons { spacing: 8px; padding-top: 10px; }
+.kaito-reminder-btn { padding: 7px 14px; border-radius: 10px; font-weight: bold; }
+.kaito-reminder-btn.snooze { background-color: #45454a; color: #ffffff; }
+.kaito-reminder-btn.snooze:hover { background-color: #55555b; }
+.kaito-reminder-btn.done { background-color: #F5C211; color: #241f00; }
+.kaito-reminder-btn.done:hover { background-color: #ffd23a; }
+
+/* Filas con botón lateral (× ocultar agente, mandar ticket a Claude) */
+.kaito-row-main { spacing: 8px; }
+.kaito-side-btn { padding: 2px 6px; border-radius: 999px; color: rgba(255,255,255,0.45); }
+.kaito-side-btn:hover, .kaito-side-btn:focus { background-color: rgba(255,255,255,0.12); color: #ffffff; }
+.kaito-side-x { font-size: 1.1em; font-weight: bold; }
+.kaito-prio { width: 14px; height: 14px; }
+.kaito-repo-pick { margin-left: 0; }
+
+/* Ticket ↔ agente, mover de estado */
+.kaito-key-chip { font-size: 0.8em; margin-left: 6px; padding: 0 5px; border-radius: 5px; background-color: rgba(120,174,237,0.15); }
+.kaito-agent-chip { spacing: 4px; }
+.kaito-teal { color: #5BC8AF; }
+.kaito-error { color: #FFA348; }
+.kaito-move { spacing: 6px; padding: 2px 12px 8px 34px; }
+.kaito-move-row { spacing: 6px; }
+.kaito-move-btn { padding: 3px 10px; border-radius: 8px; font-size: 0.9em; background-color: rgba(255,255,255,0.08); color: #ffffff; }
+.kaito-move-btn:hover, .kaito-move-btn:focus { background-color: rgba(120,174,237,0.3); }
+
+/* Responder / comentar (modal) */
+.kaito-modal-head { spacing: 0; padding: 18px 24px 4px 24px; }
+.kaito-modal-msg { color: rgba(255,255,255,0.88); padding: 6px 24px 4px 24px; }
+.kaito-mono-box { spacing: 4px; margin: 8px 24px 0 24px; padding: 10px 12px; border-radius: 10px; background-color: #252528; }
+.kaito-mono-tool { font-weight: bold; color: #FFA348; font-size: 0.9em; }
+.kaito-mono { font-family: "Adwaita Mono", monospace; font-size: 0.9em; color: #ffffff; }
+.kaito-allow { background-color: #5BC8AF; color: #002a20; }
+.kaito-allow:hover, .kaito-allow:focus { background-color: #7bdcc4; }
+.kaito-comment-entry { font-size: 15px; padding: 10px 24px 16px 24px; }
+
+/* Resumen del día */
+.kaito-daily { border-color: #78AEED; }
+.kaito-daily-icon { background-color: rgba(120,174,237,0.18); color: #78AEED; }
+.kaito-daily-line { font-size: 1.02em; color: rgba(255,255,255,0.9); }
+.kaito-daily-ok { background-color: #78AEED; color: #0b1d33; }
+.kaito-daily-ok:hover { background-color: #9cc4f2; }
+.kaito-fin { border-color: #5BC8AF; }
+.kaito-fin-icon { background-color: rgba(91,200,175,0.18); color: #5BC8AF; }
+.kaito-fin-meta { color: #5BC8AF; }
+.kaito-fin-warn { color: #FFA348; }
+.kaito-fin-quote { color: rgba(255,255,255,0.7); font-style: italic; }
+.kaito-fin-ok { background-color: #5BC8AF; color: #06231d; }
+.kaito-fin-ok:hover { background-color: #7fd8c3; }
+
+/* Uso de Claude y Codex */
+.kaito-usage { spacing: 3px; }
+.kaito-usage-name { font-weight: bold; color: #ffffff; }
+.kaito-usage-age { font-size: 0.8em; }
+.kaito-usage-label { font-size: 0.85em; color: rgba(255,255,255,0.8); margin-top: 2px; }
+.kaito-usage-track { height: 4px; border-radius: 2px; background-color: rgba(255,255,255,0.12); }
+.kaito-usage-fill { border-radius: 2px; background-color: #5BC8AF; }
+.kaito-usage-mini { width: 28px; height: 4px; border-radius: 2px; background-color: rgba(255,255,255,0.12); }
+
+/* Tareas programadas */
+.kaito-task-name { margin-left: 8px; }
+.kaito-task-failed { color: #FFA348; }
+.kaito-task-fail { border-color: #FFA348; }
+.kaito-task-fail-icon { background-color: rgba(255,163,72,0.18); color: #FFA348; }
+.kaito-task-fail-meta { color: #FFA348; }
+.kaito-task-fail-ok { background-color: #FFA348; color: #2b1600; }
+.kaito-task-fail-ok:hover { background-color: #ffb870; }
+.kaito-task-scroll { margin: 8px 24px 14px 24px; }
+.kaito-task-summary { font-weight: bold; font-size: 1.05em; color: #ffffff; }
+.kaito-task-result { color: rgba(255,255,255,0.88); }
+.kaito-reminder-btn.kaito-task-btn { padding: 7px 10px; }
+
+/* Vistas de Jira (pestañas bajo la cabecera) */
+.kaito-tabs { spacing: 4px; padding: 0 12px 4px 12px; }
+.kaito-tabs-row { spacing: 4px; }
+.kaito-tab { padding: 2px 10px; border-radius: 999px; font-size: 0.85em; color: rgba(255,255,255,0.7); background-color: rgba(255,255,255,0.06); }
+.kaito-tab:hover, .kaito-tab:focus { background-color: rgba(255,255,255,0.14); color: #ffffff; }
+.kaito-tab-active { background-color: rgba(120,174,237,0.3); color: #ffffff; font-weight: bold; }
+.kaito-assignee { margin-left: 6px; font-size: 0.85em; }
+.kaito-assign-btn { font-size: 0.85em; }
+.kaito-assign-note { font-size: 0.85em; padding: 2px 6px; }
+.kaito-assign-error { padding: 0 12px 4px 34px; font-size: 0.9em; }
