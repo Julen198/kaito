@@ -31,7 +31,7 @@ if [ -n "$SELF_DIR" ] && [ -d "$SELF_DIR/.git" ] && [ -f "$SELF_DIR/install.sh" 
   fi
 fi
 
-if [ "$KAITO_REPO" = "$REPO_DEFAULT" ]; then
+if [ -z "$KAITO_REPO" ]; then
   fail "No se ha indicado el repositorio de Kaito."
   echo "  Define KAITO_REPO, p. ej.:  KAITO_REPO=git@github.com:empresa/kaito.git bash bootstrap.sh" >&2
   exit 1
