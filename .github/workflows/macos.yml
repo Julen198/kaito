@@ -37,7 +37,10 @@ jobs:
       - name: Compilar
         run: swift build
       - name: Tests
-        run: swift test
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log || { grep -E 'error:|failed' test.log | sort -u | head -40 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
   build-macos:
     name: Build y tests en macOS
@@ -53,7 +56,17 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Compilar (debug)
-        run: swift build
+        shell: bash
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee build.log || {
+            # Cada error como anotación (legible por la API pública sin iniciar sesión).
+            grep -E ': (error|warning: .*deprecated)' build.log | sort -u | head -60 | while IFS= read -r l; do
+              f="${l%%:*}"; rest="${l#*:}"; line="${rest%%:*}"
+              echo "::error file=macos/${f#$GITHUB_WORKSPACE/macos/},line=${line}::${l##*error: }"
+            done
+            exit 1
+          }
       - name: Tests
         run: swift test
       - name: Kaito.app universal
