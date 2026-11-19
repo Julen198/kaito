@@ -15,9 +15,14 @@ const CHECK_EVERY_S = 6 * 3600;
 const RESULT_KEEP_MS = 10 * 60 * 1000; // "Actualizado a X" se ve un rato tras recargar
 
 export class UpdateNotice {
-    /** @param {{path: string, shared: object, reload: () => Promise}} ext la implementación (main.js) */
-    constructor(ext) {
+    /**
+     * @param {{path: string, shared: object, reload: () => Promise}} ext la implementación (main.js)
+     * @param {{onState?: (notice) => void, onAvailable?: (check) => void}} hooks onState: cambió el aviso (punto
+     *   del panel); onAvailable: `kaito check` encontró versión nueva ({latest, behind, changes}).
+     */
+    constructor(ext, hooks = {}) {
         this._ext = ext;
+        this._hooks = hooks;
         this._bin = GLib.build_filenamev([ext.path, 'bin', 'kaito']);
         this._enabled = GLib.file_test(GLib.build_filenamev([ext.path, '.git']), GLib.FileTest.EXISTS) &&
             GLib.file_test(this._bin, GLib.FileTest.IS_EXECUTABLE);
@@ -32,7 +37,7 @@ export class UpdateNotice {
             label: 'Actualizar', style_class: 'kaito-update-btn', can_focus: true, track_hover: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._button.connect('clicked', () => this.update());
+        this._button.connect('clicked', () => this.update().catch(e => console.warn(`kaito: actualizar: ${e.message}`)));
         this.item.add_child(this._label);
         this.item.add_child(this._button);
         this.item.visible = false;
@@ -72,8 +77,18 @@ export class UpdateNotice {
             this._set(null);
     }
 
+    /** ¿Hay una versión nueva sin instalar? (para el punto del panel) */
+    get pending() {
+        return this._state?.kind === 'available' || this._state?.kind === 'error';
+    }
+
     _set(state) {
         this._state = state;
+        try {
+            this._hooks.onState?.(this);
+        } catch (e) {
+            console.warn(`kaito: aviso de actualización: ${e.message}`);
+        }
         const k = state?.kind;
         this.item.visible = !!state;
         this._label.remove_style_class_name('kaito-error');
@@ -120,6 +135,8 @@ export class UpdateNotice {
                 return; // sin red o sin acceso: se reintenta en el próximo ciclo
             this._ext.shared.lastCheck = {...c, at: Date.now()};
             this._set(c.behind > 0 ? {kind: 'available', latest: c.latest} : null);
+            if (c.behind > 0)
+                this._hooks.onAvailable?.(c);
         } catch (e) {
             if (!this._cancellable.is_cancelled())
                 console.warn(`kaito: comprobar actualizaciones: ${e.message}`);

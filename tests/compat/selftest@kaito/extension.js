@@ -38,7 +38,20 @@ const NEEDS = {
 const AGENTS = [NEEDS, {
     id: 'sess-work', cwd: 'web', cwdPath: '/tmp', state: 'working', live: true, age: 5, pid: null,
     lastAction: 'Edit src/app.js',
+}, {
+    id: 'codex-0000', provider: 'codex', cwd: 'api', cwdPath: '/tmp', state: 'working', live: true, age: 3, pid: null,
+    lastAction: '$ npm test', activityMs: Date.now(),
+}, {
+    id: 'gemini-pid1', provider: 'gemini', cwd: 'docs', cwdPath: '/tmp/docs', state: 'open', live: false, age: 60, pid: null,
 }];
+const CONFIG = () => GLib.build_filenamev([GLib.get_user_config_dir(), 'kaito', 'config.json']);
+function patchConfig(patch) {
+    let raw = {};
+    try {
+        raw = JSON.parse(new TextDecoder().decode(GLib.file_get_contents(CONFIG())[1]));
+    } catch (_e) { /* sin config */ }
+    GLib.file_set_contents(CONFIG(), JSON.stringify({...raw, ...patch}));
+}
 const ISSUES = [
     {key: 'RUN-1', summary: 'Arreglar el login', status: 'Por hacer', category: 'new', priority: 'high'},
     {key: 'RUN-2', summary: 'Cupones FR', status: 'En curso', category: 'indeterminate', priority: 'low'},
@@ -88,7 +101,7 @@ async function run() {
         ind.menu.open(false);
         await wait(800);
         const t = labels(ind.menu.box);
-        for (const want of ['RUN-1', 'Arreglar el login', 'Te necesita', 'web', 'Revisar ventas'])
+        for (const want of ['RUN-1', 'Arreglar el login', 'Te necesita', 'web', 'Revisar ventas', 'Codex', 'Gemini', 'api', 'abierto'])
             if (!t.includes(want))
                 throw new Error(`falta «${want}» en el menú`);
         ind._toggleExpand?.(ISSUES[0]);
@@ -153,6 +166,86 @@ async function run() {
         await wait(300);
         m._taskResult.close();
         return 'respuesta, comentario, resultado';
+    });
+    await step('jira-off', async () => {
+        patchConfig({jiraEnabled: false});
+        for (let i = 0; i < 20 && ind._cfg.jiraEnabled; i++)
+            await wait(250);
+        if (ind._cfg.jiraEnabled)
+            throw new Error('el watcher de config no aplicó jiraEnabled=false');
+        if (ind._headers.jira.visible || ind._jiraWrap.actor.visible || ind._seg.jira.seg.visible || ind._jiraTabsItem.visible)
+            throw new Error('la sección o el segmento de Jira siguen visibles');
+        m.openCapture();
+        const tabs = Object.keys(m._capture._tabs);
+        m._capture.close();
+        if (tabs.includes('jira'))
+            throw new Error(`la captura sigue con pestaña Jira: ${tabs}`);
+        patchConfig({jiraEnabled: true});
+        for (let i = 0; i < 20 && !ind._cfg.jiraEnabled; i++)
+            await wait(250);
+        if (!ind._headers.jira.visible || !ind._seg.jira.seg.visible)
+            throw new Error('Jira no volvió al activarlo');
+        return `captura: ${tabs.join('/')}`;
+    });
+    await step('quiet', async () => {
+        for (let i = 0; i < 40 && m.quiet._first; i++)
+            await wait(250); // la entrega de la cola espera 5 s tras arrancar
+        m.quiet.set('on');
+        await wait(300);
+        if (!m.quiet.quiet || !ind._moon.visible || ind._panelBox.opacity === 255)
+            throw new Error('sin luna o sin atenuar con No molestar');
+        if (!ind._dnd.status.text.startsWith('No molestar'))
+            throw new Error(`estado del menú: ${ind._dnd.status.text}`);
+        const before = m._reminders._box ? m._reminders._box.get_n_children() : 0;
+        m.showFinished({id: 'k1', agentId: 'sess-work', title: 'RUN-1 listo', meta: 'web · 5 min', lines: []});
+        m._onTaskFinish(TASK, {ok: true, summary: 'ok'});
+        ind._notifyDone(AGENTS[2], 4);
+        ind._notifyDone(AGENTS[2], 5); // mismo agente: deduplicado
+        const after = m._reminders._box ? m._reminders._box.get_n_children() : 0;
+        if (after !== before)
+            throw new Error('con No molestar se mostró una tarjeta');
+        if (m.quiet.queue.length !== 3)
+            throw new Error(`cola: ${m.quiet.queue.length} (esperaba 3)`);
+        m.quiet.set('off');
+        await wait(500);
+        if (m.quiet.quiet || ind._moon.visible)
+            throw new Error('No molestar no se desactivó');
+        const card = m._reminders._cards.get('__quiet');
+        if (!card)
+            throw new Error('sin tarjeta «Mientras no estabas»');
+        const t = labels(card);
+        if (!t.includes('Mientras no estabas') || !t.some(x => x.includes('RUN-1 listo')))
+            throw new Error(`tarjeta: ${t.join(' | ')}`);
+        m._reminders._removeCard('__quiet');
+        return `${t.length} etiquetas, cola vacía: ${m.quiet.queue.length === 0}`;
+    });
+    await step('update-notice', async () => {
+        ind._syncUpdateBadge({pending: true});
+        if (!ind._badge.visible || !ind.accessible_name.includes('actualización disponible'))
+            throw new Error('sin punto de actualización');
+        ind._onUpdateAvailable({latest: '9.9.9', behind: 2, changes: ['Uno', 'Dos']});
+        await wait(300);
+        const n = ind._source?.notifications?.length ?? 0;
+        if (!ind._source)
+            throw new Error('sin notificación');
+        ind._onUpdateAvailable({latest: '9.9.9', behind: 2, changes: ['Uno', 'Dos']}); // misma versión: no repite
+        await wait(200);
+        const n2 = ind._source?.notifications?.length ?? 0;
+        ind._syncUpdateBadge({pending: false});
+        ind._source?.destroy();
+        if (n2 > n)
+            throw new Error('notificó dos veces la misma versión');
+        if (ind._badge.visible)
+            throw new Error('el punto no se quitó');
+        return `${n} notificación`;
+    });
+    await step('moon-icon', async () => {
+        const theme = new St.IconTheme();
+        const names = ['weather-clear-night-symbolic', 'mail-unread-symbolic'];
+        const missing = names.filter(name => !theme.lookup_icon(name, 16, 0));
+        if (missing.length)
+            throw new Error(`iconos ausentes: ${missing}`);
+        return 'iconos del tema presentes';
     });
     await step('hot-reload', async () => {
         const before = impl();

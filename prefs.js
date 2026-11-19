@@ -9,7 +9,13 @@ import {
     TODOS_PATH, CLAUDE_PROJECTS, TASKS_PATH, TASK_RUNS_DIR,
     PRESETS, TERMINALS, readConfig, updateConfig, readJson, writeJson, getToken, storeToken, checkJira, scanAgents,
     BUILTIN_VIEWS, normalizeCustomViews, resolveTerminal, terminalFocusLevel, ptyxisVersion, migrateTerminalOnce,
+    installedProviders,
 } from './common.js';
+import {LEVEL_TEXT} from './providers.js';
+import {parseHHMM, fmtHHMM} from './quiet.js';
+
+const DAY_NAMES = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+const DAY_FULL = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
 
 const TERMINAL_LABELS = ['Automático (recomendado)', 'Ptyxis', 'GNOME Terminal', 'Consola (kgx)', 'Warp (pestaña)', 'Warp (ventana)'];
 const TERMINAL_NAMES = {ptyxis: 'Ptyxis', 'gnome-terminal': 'GNOME Terminal', kgx: 'Consola (kgx)', warp: 'Warp (pestaña)', 'warp-window': 'Warp (ventana)'};
@@ -95,6 +101,7 @@ export default class KaitoPreferences extends ExtensionPreferences {
             description: 'Pestañas bajo la sección Jira. "Mías" es la consulta de arriba y siempre está',
         });
         page.add(group);
+        this._jiraGroups.push(group);
         const builtin = {...cfg.jiraBuiltinViews};
         const subtitles = {
             unassigned: 'Tickets abiertos sin responsable en tus proyectos',
@@ -119,6 +126,7 @@ export default class KaitoPreferences extends ExtensionPreferences {
             description: 'Cada una sale como una pestaña más. Pulsa ✓ en el campo para guardar',
         });
         page.add(custom);
+        this._jiraGroups.push(custom);
         const add = new Gtk.Button({icon_name: 'list-add-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Añadir vista'});
         add.add_css_class('flat');
         custom.set_header_suffix(add);
@@ -206,6 +214,32 @@ export default class KaitoPreferences extends ExtensionPreferences {
         // --- Jira ---
         const jira = new Adw.PreferencesGroup({title: 'Jira'});
         page.add(jira);
+        // Interruptor general: apagado, Kaito no habla con Jira (el resto de filas quedan inactivas).
+        const useJira = new Adw.SwitchRow({
+            title: 'Usar Jira', subtitle: 'Tickets en el menú y el panel, crear tickets, mover y comentar', active: cfg.jiraEnabled,
+        });
+        jira.add(useJira);
+        const jiraRows = [];
+        this._jiraGroups = [];
+        const syncJira = () => {
+            for (const w of [...jiraRows, ...this._jiraGroups])
+                w.sensitive = useJira.active;
+        };
+        const origAdd = jira.add.bind(jira);
+        jira.add = row => {
+            origAdd(row);
+            jiraRows.push(row);
+        };
+        useJira.connect('notify::active', () => {
+            try {
+                updateConfig({jiraEnabled: useJira.active});
+            } catch (e) {
+                console.error(`kaito: no se pudo guardar jiraEnabled: ${e.message}`);
+            }
+            syncJira();
+            if (useJira.active)
+                runCheck();
+        });
 
         const status = new Adw.ActionRow({title: 'Estado', subtitle: 'Comprobando…'});
         const test = new Gtk.Button({label: 'Probar conexión', valign: Gtk.Align.CENTER});
@@ -303,6 +337,7 @@ export default class KaitoPreferences extends ExtensionPreferences {
         });
 
         this._viewsGroup(page, cfg);
+        syncJira();
 
         // --- Agentes ---
         const agents = new Adw.PreferencesGroup({title: 'Agentes'});
@@ -328,6 +363,9 @@ export default class KaitoPreferences extends ExtensionPreferences {
         reviewRow.subtitle = '0 = sin recordatorio';
         agents.add(reviewRow);
         updateSessions();
+
+        this._providersGroup(page, cfg);
+        this._quietGroup(page, cfg);
 
         // --- General ---
         const general = new Adw.PreferencesGroup({title: 'General'});
@@ -401,6 +439,120 @@ export default class KaitoPreferences extends ExtensionPreferences {
         updateTodos();
 
         refreshTokenInfo();
-        runCheck();
+        if (cfg.jiraEnabled)
+            runCheck();
+        else
+            status.subtitle = 'Jira desactivado';
+    }
+
+    /** Agentes detectados: un interruptor por proveedor instalado; los que faltan, atenuados. */
+    _providersGroup(page, cfg) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Agentes detectados',
+            description: 'CLIs de agentes que Kaito encuentra en tu equipo. Desactiva los que no quieras ver en el menú',
+        });
+        page.add(group);
+        const toggles = {...cfg.agentProviders};
+        let list = [];
+        try {
+            list = installedProviders(true);
+        } catch (e) {
+            console.error(`kaito: proveedores: ${e.message}`);
+        }
+        for (const p of list) {
+            if (p.installed) {
+                const row = new Adw.SwitchRow({
+                    title: p.title, subtitle: `${LEVEL_TEXT[p.level]} · ${tilde(p.path)}`, active: toggles[p.id] !== false,
+                });
+                row.connect('notify::active', () => {
+                    toggles[p.id] = row.active;
+                    try {
+                        updateConfig({agentProviders: toggles});
+                    } catch (e) {
+                        console.error(`kaito: no se pudo guardar agentProviders: ${e.message}`);
+                    }
+                });
+                group.add(row);
+            } else {
+                const row = new Adw.ActionRow({title: p.title, subtitle: 'No instalado', sensitive: false});
+                group.add(row);
+            }
+        }
+    }
+
+    /** Horario de trabajo y No molestar. */
+    _quietGroup(page, cfg) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Horario y No molestar',
+            description: 'Fuera de horario (o con No molestar del menú) Kaito no avisa ni suena: lo guarda y te lo enseña al volver. Las tareas programadas siguen ejecutándose. No cambia el No molestar de GNOME',
+        });
+        page.add(group);
+        const wh = {...cfg.workHours, days: [...cfg.workHours.days]};
+        const save = () => {
+            try {
+                updateConfig({workHours: wh});
+            } catch (e) {
+                console.error(`kaito: no se pudo guardar workHours: ${e.message}`);
+            }
+        };
+        const use = new Adw.SwitchRow({
+            title: 'Usar horario de trabajo', subtitle: 'Fuera de él, No molestar automático', active: wh.enabled,
+        });
+        group.add(use);
+
+        const daysRow = new Adw.ActionRow({title: 'Días', subtitle: 'Días laborables'});
+        const box = new Gtk.Box({spacing: 4, valign: Gtk.Align.CENTER});
+        box.add_css_class('linked');
+        DAY_NAMES.forEach((name, i) => {
+            const b = new Gtk.ToggleButton({label: name, active: wh.days.includes(i + 1), tooltip_text: DAY_FULL[i]});
+            b.connect('toggled', () => {
+                const set = new Set(wh.days);
+                if (b.active)
+                    set.add(i + 1);
+                else
+                    set.delete(i + 1);
+                wh.days = [...set].sort();
+                save();
+            });
+            box.append(b);
+        });
+        daysRow.add_suffix(box);
+        group.add(daysRow);
+
+        const timeRow = (title, key) => {
+            const row = new Adw.EntryRow({title, text: wh[key], show_apply_button: true});
+            row.connect('apply', () => {
+                const m = parseHHMM(row.text);
+                if (m === null) {
+                    row.add_css_class('error');
+                    return;
+                }
+                row.remove_css_class('error');
+                wh[key] = fmtHHMM(m);
+                row.text = wh[key];
+                save();
+            });
+            row.connect('changed', () => {
+                if (parseHHMM(row.text) !== null)
+                    row.remove_css_class('error');
+            });
+            return row;
+        };
+        const start = timeRow('Empieza (HH:MM)', 'start');
+        const end = timeRow('Termina (HH:MM; si es menor que el inicio, al día siguiente)', 'end');
+        group.add(start);
+        group.add(end);
+        const sync = () => {
+            for (const r of [daysRow, start, end])
+                r.sensitive = use.active;
+        };
+        use.connect('notify::active', () => {
+            wh.enabled = use.active;
+            save();
+            sync();
+        });
+        sync();
+        group.add(switchRow('Silenciar también recordatorios',
+            'Con No molestar, los recordatorios esperan a que termine (si no, salen sin sonido)', 'dndSilenceReminders', cfg));
     }
 }

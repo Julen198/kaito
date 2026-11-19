@@ -6,6 +6,11 @@ import Secret from 'gi://Secret';
 import Soup from 'gi://Soup?version=3.0';
 
 import {parseTail, ticketFromHead} from './agents.js';
+import {normalizeWorkHours} from './quiet.js';
+import {
+    detectProviders, searchDirs, normalizeProviderToggles, matchAgentProcess, dedupeProcesses,
+    parseRolloutMeta, parseCodexTail, codexStatus, rolloutId,
+} from './providers.js';
 
 Gio._promisify(Secret, 'password_lookup', 'password_lookup_finish');
 Gio._promisify(Secret, 'password_store', 'password_store_finish');
@@ -115,6 +120,15 @@ export function readConfig() {
     cfg.showUsage = raw.showUsage !== false;
     cfg.tasksEnabled = raw.tasksEnabled !== false;
     cfg.checkUpdates = raw.checkUpdates !== false;
+    cfg.jiraEnabled = raw.jiraEnabled !== false;
+    cfg.workHours = normalizeWorkHours(raw.workHours);
+    cfg.dndManual = raw.dndManual === true;
+    for (const k of ['dndUntil', 'dndSkipUntil']) {
+        const v = Number(raw[k]);
+        cfg[k] = Number.isFinite(v) && v > 0 ? v : null;
+    }
+    cfg.dndSilenceReminders = raw.dndSilenceReminders === true;
+    cfg.agentProviders = normalizeProviderToggles(raw.agentProviders);
     cfg.captureMode = ['reminder', 'jira', 'task'].includes(raw.captureMode) ? raw.captureMode : 'note';
     cfg.terminal = TERMINALS.includes(raw.terminal) ? raw.terminal : 'auto';
     cfg.jiraView = typeof raw.jiraView === 'string' && raw.jiraView ? raw.jiraView : 'mine';
@@ -1598,8 +1612,241 @@ export function parseCheck(out) {
         const j = JSON.parse(String(out ?? '').trim().split('\n').at(-1));
         if (j.error || !Number.isFinite(Number(j.behind)))
             return null;
-        return {behind: Number(j.behind), latest: j.latest ?? null, current: j.current ?? null};
+        const changes = (Array.isArray(j.changes) ? j.changes : []).filter(c => typeof c === 'string' && c.trim()).slice(0, 5);
+        return {behind: Number(j.behind), latest: j.latest ?? null, current: j.current ?? null, changes};
     } catch {
         return null;
     }
+}
+
+/** Puro. Cuerpo de la notificación de versión nueva: hasta `max` asuntos de commit (y "… y N más"). */
+export function changelogBody(changes, max = 3) {
+    const list = (Array.isArray(changes) ? changes : []).map(c => String(c ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    if (!list.length)
+        return 'Pulsa Actualizar para instalarla';
+    const cut = s => (s.length > 90 ? `${s.slice(0, 89)}…` : s);
+    const lines = list.slice(0, max).map(c => `• ${cut(c)}`);
+    if (list.length > max)
+        lines.push(`… y ${list.length - max} más`);
+    return lines.join('\n');
+}
+
+// --- Aviso de actualización (una notificación por versión) ---
+
+export const UPDATE_STATE_PATH = GLib.build_filenamev([CACHE_DIR, 'update.json']);
+
+export const readUpdateState = () => {
+    const v = readJson(UPDATE_STATE_PATH, {});
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+};
+
+export function writeUpdateState(patch) {
+    GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+    GLib.file_set_contents(UPDATE_STATE_PATH, JSON.stringify({...readUpdateState(), ...patch}));
+}
+
+// --- No molestar: cola de avisos "Mientras no estabas" ---
+
+export const QUIET_QUEUE_PATH = GLib.build_filenamev([CACHE_DIR, 'quiet-queue.json']);
+
+export function readQuietQueue() {
+    const v = readJson(QUIET_QUEUE_PATH, []);
+    return Array.isArray(v) ? v : [];
+}
+
+export function writeQuietQueue(queue) {
+    GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+    GLib.file_set_contents(QUIET_QUEUE_PATH, JSON.stringify(queue));
+}
+
+// --- Proveedores de agentes (providers.js): ejecutables instalados y sesiones vivas ---
+
+const PROVIDERS_RECHECK_S = 300;
+const providersCache = {t: -Infinity, list: null};
+
+/** Carpetas bin de nvm (~/.nvm/versions/node/<v>/bin), la versión más nueva primero. */
+function nvmBins(home) {
+    const root = GLib.build_filenamev([home, '.nvm', 'versions', 'node']);
+    const out = [];
+    try {
+        for (const i of Gio.File.new_for_path(root).enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null))
+            out.push(i.get_name());
+    } catch (_e) { /* sin nvm */ }
+    const ver = n => n.replace(/^v/, '').split('.').map(Number);
+    out.sort((a, b) => {
+        const [x, y] = [ver(a), ver(b)];
+        return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]);
+    });
+    return out.map(n => GLib.build_filenamev([root, n, 'bin']));
+}
+
+/** Ruta de un ejecutable en las carpetas de searchDirs, o null. */
+export function findAgentBin(bin, dirs = null) {
+    dirs ??= searchDirs(GLib.get_home_dir(), GLib.getenv('PATH') ?? '', nvmBins(GLib.get_home_dir()));
+    for (const d of dirs) {
+        const p = GLib.build_filenamev([d, bin]);
+        if (GLib.file_test(p, GLib.FileTest.IS_EXECUTABLE) && !GLib.file_test(p, GLib.FileTest.IS_DIR))
+            return p;
+    }
+    return null;
+}
+
+/** Proveedores conocidos con su ruta (cacheado 5 min; force para Ajustes). */
+export function installedProviders(force = false, nowMono = GLib.get_monotonic_time() / 1e6) {
+    if (!force && providersCache.list && nowMono - providersCache.t < PROVIDERS_RECHECK_S)
+        return providersCache.list;
+    const dirs = searchDirs(GLib.get_home_dir(), GLib.getenv('PATH') ?? '', nvmBins(GLib.get_home_dir()));
+    providersCache.list = detectProviders(b => findAgentBin(b, dirs));
+    providersCache.t = nowMono;
+    return providersCache.list;
+}
+
+const readBytesText = path => {
+    try {
+        const [ok, bytes] = GLib.file_get_contents(path);
+        return ok ? new TextDecoder().decode(bytes) : null;
+    } catch (_e) {
+        return null;
+    }
+};
+
+/**
+ * Procesos de agentes que no son Claude [{pid, ppid, provider, cwd, startMs}] (solo los propios: el cwd de los
+ * ajenos no se puede leer). providers: ids a buscar.
+ */
+export function scanAgentProcesses(providers) {
+    const want = new Set(providers);
+    const found = [];
+    if (!want.size)
+        return found;
+    let en;
+    try {
+        en = Gio.File.new_for_path('/proc').enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+    } catch (_e) {
+        return found;
+    }
+    for (const info of en) {
+        const name = info.get_name();
+        if (!/^\d+$/.test(name))
+            continue;
+        const cmd = readBytesText(`/proc/${name}/cmdline`);
+        if (!cmd)
+            continue; // hilo del kernel o proceso ya terminado
+        const argv = cmd.split('\0').filter((a, i, all) => a !== '' || i < all.length - 1);
+        const provider = matchAgentProcess(argv, '');
+        if (!provider || !want.has(provider))
+            continue;
+        let cwd;
+        try {
+            cwd = GLib.file_read_link(`/proc/${name}/cwd`);
+        } catch (_e) {
+            continue; // de otro usuario
+        }
+        const ppid = Number(/^PPid:\s*(\d+)/m.exec(readBytesText(`/proc/${name}/status`) ?? '')?.[1]) || 0;
+        let startMs = null;
+        try {
+            const q = Gio.File.new_for_path(`/proc/${name}`).query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+            startMs = q.get_modification_date_time().to_unix() * 1000;
+        } catch (_e) { /* terminó entre medias */ }
+        found.push({pid: Number(name), ppid, provider, cwd, startMs});
+    }
+    return dedupeProcesses(found);
+}
+
+/** Rollout de Codex abierto por el proceso (/proc/<pid>/fd), o null. */
+function rolloutFromFds(pid) {
+    let en;
+    try {
+        en = Gio.File.new_for_path(`/proc/${pid}/fd`).enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+    } catch (_e) {
+        return null;
+    }
+    for (const info of en) {
+        let target;
+        try {
+            target = GLib.file_read_link(`/proc/${pid}/fd/${info.get_name()}`);
+        } catch (_e) {
+            continue;
+        }
+        if (target.startsWith(`${CODEX_SESSIONS}/`) && /\/rollout-[^/]*\.jsonl$/.test(target))
+            return target;
+    }
+    return null;
+}
+
+const rolloutMetaCache = new Map(); // ruta -> {id, cwd}
+
+function rolloutMeta(path) {
+    if (rolloutMetaCache.has(path))
+        return rolloutMetaCache.get(path);
+    let meta = null;
+    try {
+        meta = parseRolloutMeta(readHead(Gio.File.new_for_path(path)));
+    } catch (_e) { /* ilegible */ }
+    if (meta) {
+        if (rolloutMetaCache.size > 200)
+            rolloutMetaCache.clear();
+        rolloutMetaCache.set(path, meta);
+    }
+    return meta;
+}
+
+/** Rollout de una sesión de Codex: el que tiene abierto; si no, el más nuevo de su carpeta posterior al arranque. */
+export function codexRolloutFor(proc, rollouts = null) {
+    const fd = rolloutFromFds(proc.pid);
+    if (fd)
+        return {path: fd, how: 'fd'};
+    for (const f of rollouts ?? recentRollouts(CODEX_SESSIONS)) {
+        if (proc.startMs && f.mtime * 1000 < proc.startMs - 5000)
+            break; // más viejo que el proceso: de otra sesión
+        if (rolloutMeta(f.path)?.cwd === proc.cwd)
+            return {path: f.path, how: 'cwd'};
+    }
+    return null;
+}
+
+const baseName = p => String(p ?? '').split('/').filter(Boolean).pop() ?? null;
+
+/**
+ * Agentes de proveedores que no son Claude, con la forma de collectAgents: {id, provider, pid, cwd, cwdPath, age,
+ * live, state, lastAction, lastText, activityMs}. Codex: estado por su rollout (y el hook de notify); los demás:
+ * solo proceso (state 'open').
+ */
+export function collectOtherAgents(providers, states = {}, liveS = DEFAULTS.liveSeconds) {
+    const procs = scanAgentProcesses(providers);
+    if (!procs.length)
+        return [];
+    const nowMs = Date.now();
+    const rollouts = procs.some(p => p.provider === 'codex') ? recentRollouts(CODEX_SESSIONS) : [];
+    const used = new Set();
+    return procs.map(p => {
+        const a = {
+            id: `${p.provider}-pid${p.pid}`, provider: p.provider, pid: p.pid, cwd: baseName(p.cwd), cwdPath: p.cwd,
+            age: p.startMs ? Math.max(0, Math.floor((nowMs - p.startMs) / 1000)) : 0, live: false, state: 'open',
+            lastAction: null, lastText: null, activityMs: p.startMs ?? 0, ticket: null,
+        };
+        if (p.provider !== 'codex')
+            return a;
+        const r = codexRolloutFor(p, rollouts.filter(f => !used.has(f.path)));
+        if (!r)
+            return {...a, state: 'idle'};
+        used.add(r.path);
+        try {
+            const q = Gio.File.new_for_path(r.path).query_info('standard::size,time::modified', Gio.FileQueryInfoFlags.NONE, null);
+            const mtimeMs = q.get_modification_date_time().to_unix() * 1000;
+            const tail = parseCodexTail(readCodexTail(r.path, q.get_size()));
+            const sid = rolloutId(r.path) ?? rolloutMeta(r.path)?.id ?? `pid${p.pid}`;
+            const hook = states[`codex-${sid}`] ?? Object.entries(states).find(([k, s]) => k.startsWith('codex-cwd-') && s.cwd === p.cwd)?.[1] ?? null;
+            const st = codexStatus({tail, mtimeMs, nowMs, liveS, hook});
+            const msg = st.state === 'done' && hook?.message ? hook.message : null;
+            return {
+                ...a, id: `codex-${sid}`, live: st.live, state: st.state, lastAction: tail.lastAction,
+                lastText: tail.lastText ?? msg, age: Math.max(0, Math.floor((nowMs - mtimeMs) / 1000)),
+                activityMs: Math.max(mtimeMs, a.activityMs), rollout: r.how,
+            };
+        } catch (e) {
+            console.warn(`kaito: rollout de Codex ${r.path}: ${e.message}`);
+            return {...a, state: 'idle'};
+        }
+    });
 }

@@ -163,12 +163,93 @@ Menú del indicador > Ajustes (o `gnome-extensions prefs kaito@runnea`): conexi�
 ventana de actividad de agentes, intervalo de refresco y borrado de pendientes hechos.
 Se guardan en `config.json` (`jiraJql`, `jiraPreset`, `jiraMax`, `jiraView`, `jiraViews`, `jiraBuiltinViews`, `jiraProjects`, `terminal`, `agentWindowMinutes`,
 `liveSeconds`, `refreshSeconds`, `notifyNeeds`, `notifyDone`, `dailySummary`, `pinned`, `showUsage`,
-`tasksEnabled`, `checkUpdates`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
+`tasksEnabled`, `checkUpdates`, `jiraEnabled`, `workHours`, `dndManual`, `dndUntil`, `dndSkipUntil`,
+`dndSilenceReminders`, `agentProviders`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
 `~/Documentos`, `~/Documents`, `~/dev`, `~/code`, `~/projects` y `~/src`.
 
 `pinned` (Ajustes > General > "Mostrar siempre desplegado") deja un panel fijo arriba a la
 derecha, por encima de las ventanas (se oculta en pantalla completa y en la vista de
 actividades), con las mismas tres secciones que el menú.
+
+### Jira opcional
+
+Ajustes > Jira > **Usar Jira** (`jiraEnabled`, activado por defecto). Apagado, Kaito no habla con Jira: ni
+descargas ni temporizadores de vistas; desaparecen la sección Jira y sus pestañas del menú (y de la tarjeta
+fija), el contador de tickets del panel, la pestaña Jira de la captura y los botones que solo tienen sentido
+con Jira (mandar a Claude, programar revisión, asignarme, cambiar estado, "Comentar en Jira" en avisos,
+tarjetas de tareas y resultado de una tarea). El resumen de la mañana deja de contar tickets; al terminar un
+agente con ticket se sigue mostrando la tarjeta con lo de git, pero el ticket no se mueve; las tareas
+programadas con clave se ejecutan sin el contexto del ticket. La clave del ticket sigue viéndose como texto.
+El cambio se aplica al momento (Kaito vigila `config.json`).
+
+### Aviso de actualización
+
+Si `kaito check --json` (cada 6 h; `checkUpdates`) encuentra commits nuevos, además de la fila del menú:
+
+- una notificación **"Kaito <versión> disponible"** con hasta 3 líneas del changelog (asuntos de commit;
+  `kaito check --json` devuelve `"changes": [...]`, hasta 5, de `git log --format=%s HEAD..@{u}`) y los
+  botones **Actualizar** (lo mismo que el botón del menú) y **Más tarde**. Sale una vez por versión: la última
+  avisada se guarda en `~/.cache/kaito/update.json`;
+- un **punto azul** en el indicador del panel hasta que actualices (el nombre accesible dice "actualización
+  disponible").
+
+### Horario y No molestar
+
+Kaito tiene su propio "No molestar" (no toca el de GNOME). Mientras dura no salen notificaciones de agentes
+(te necesita / terminó), tarjetas de ticket listo ni de tareas programadas, el aviso de versión nueva ni
+sonidos; el resumen de la mañana espera. Todo eso se guarda (en memoria y en
+`~/.cache/kaito/quiet-queue.json`, máximo 30, sin duplicados) y al terminar sale **una** tarjeta
+"Mientras no estabas" con la lista: cada línea con acción (ir al agente, ver la tarea, actualizar) es
+clicable; "Entendido" la cierra. Las tareas programadas se siguen ejecutando. Los recordatorios salen igual
+(sin sonido) salvo con **Silenciar también recordatorios** (`dndSilenceReminders`): entonces esperan a que
+termine.
+
+- Menú > **No molestar**: interruptor (sin límite) y **1 h**, **Hasta mañana** (hasta el próximo inicio de
+  jornada) y **Desactivar**. Fuera de horario la fila dice p. ej. "Fuera de horario hasta lun 09:00" y
+  "Desactivar" deja de silenciar hasta la próxima jornada (`dndSkipUntil`). Con silencio, el panel muestra
+  una luna y se atenúa un poco.
+- Ajustes > **Horario y No molestar**: "Usar horario de trabajo" (`workHours: {enabled, days: [1..7] (lunes
+  = 1), start: "09:00", end: "18:00"}`; por defecto apagado, lunes a viernes de 9 a 18). Si el fin es
+  anterior al inicio (22:00–06:00) el tramo acaba al día siguiente. Horas locales: los cambios de hora no
+  descuadran.
+
+### Agentes de Claude Code, Codex y otros
+
+Kaito busca estas CLIs en el `PATH` y en `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`,
+`~/.opencode/bin`, `~/.nvm/versions/node/*/bin`, `~/.cargo/bin` (la shell de GNOME no lee tu `~/.bashrc`):
+
+| Proveedor | Integración |
+|---|---|
+| Claude Code (`claude`) | Completa: estado por hooks, "te necesita", Permitir/Denegar, ticket, tarjeta de ticket listo |
+| Codex (`codex`) | Sesiones: trabajando/parado, última acción, aviso al terminar (≥ 3 min trabajando) |
+| Gemini CLI, OpenCode, Aider, Cursor Agent | Básica: sesión abierta y su carpeta ("abierto") |
+
+Los agentes que no son de Claude salen en la misma lista con una etiqueta del proveedor; se pueden ocultar
+(×) y el clic lleva a su terminal (misma búsqueda de ventana por el árbol de procesos). Ajustes > **Agentes
+detectados** activa o desactiva cada proveedor (`agentProviders: {"claude": true, "codex": true, …}`) y
+muestra los que no están instalados atenuados. `kaito doctor` también los lista.
+
+Cómo se ve una sesión de Codex (solo lectura, nunca se guarda el contenido de la conversación):
+
+1. procesos `codex` vivos (`/proc/*/cmdline`; se ignoran `app-server`, `exec`, `mcp`… y el lanzador de node
+   cuando el binario nativo es su hijo) y su carpeta (`/proc/<pid>/cwd`);
+2. su rollout: el `~/.codex/sessions/AAAA/MM/DD/rollout-*.jsonl` que el proceso tiene abierto
+   (`/proc/<pid>/fd`) o, si no, el más reciente cuyo `session_meta.cwd` es esa carpeta;
+3. estado: **trabajando** si el último `task_started` no tiene su `task_complete` (o, en rollouts sin turnos,
+   si se modificó hace menos de `liveSeconds`); la última acción sale de la cola (orden, fichero editado o
+   primera línea del último mensaje, recortadas).
+
+**Aviso al terminar (opcional):** Codex puede ejecutar un programa al acabar cada turno (`notify`). Apúntalo
+a `hooks/kaito-codex-notify.py`, que escribe `~/.cache/kaito/state/codex-<id>.json` con `"state": "done"` (y
+solo la primera línea del último mensaje). En `~/.codex/config.toml`, **antes de la primera `[sección]`**:
+
+```toml
+notify = ["python3", "/ruta/a/kaito/hooks/kaito-codex-notify.py"]
+```
+
+`install.sh` lo ofrece (por defecto No; hace copia `config.toml.bak-kaito-*` e inserta solo esa línea) si
+encuentras Codex y no tienes ya un `notify`; si tienes otro, no lo toca y te dice cómo encadenarlo.
+`--no-codex` omite la pregunta. Sin el hook, el estado sale igualmente del rollout.
 
 ## Datos
 
@@ -217,7 +298,9 @@ actividades), con las mismas tres secciones que el menú.
   tuyas) hace `PUT /rest/api/3/issue/<KEY>/assignee`. Ajustes > "Vistas de Jira": ocultar las integradas
   (`jiraBuiltinViews`) y vistas propias con nombre y JQL (`jiraViews: [{id, name, jql, enabled}]`).
 - Pruebas: `node when.test.js` (con `TZ=Europe/Madrid` prueba también el cambio de hora), `gjs -m kaito.test.js`, `gjs -m jiradraft.test.js`,
-  `XDG_CONFIG_HOME=$(mktemp -d) XDG_DATA_HOME=$(mktemp -d) gjs -m tasks.test.js`, `hooks/kaito-hook.py --selftest`, `hooks/kaito-statusline.py --selftest`.
+  `XDG_CONFIG_HOME=$(mktemp -d) XDG_DATA_HOME=$(mktemp -d) gjs -m tasks.test.js`, `node quiet.test.js`, `node providers.test.js`
+  (también con `gjs -m`), `bash tests/cli.test.sh`, `hooks/kaito-hook.py --selftest`, `hooks/kaito-statusline.py --selftest`,
+  `hooks/kaito-codex-notify.py --selftest`.
 
 ## Avisos de agentes
 

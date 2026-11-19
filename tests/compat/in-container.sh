@@ -22,16 +22,29 @@ mkdir -p $EXT && cp -a "$SRC"/. $EXT/ && rm -rf $EXT/.git $EXT/schemas/gschemas.
 glib-compile-schemas $EXT/schemas || res schemas FAIL
 
 # 1. Tests de GJS (detectan JS que el SpiderMonkey de esta versión no entiende).
-for t in kaito.test.js jiradraft.test.js tasks.test.js; do
+for t in kaito.test.js jiradraft.test.js tasks.test.js quiet.test.js providers.test.js; do
     fresh $W/t-$t
     out=$(cd $EXT && timeout 120 dbus-run-session -- gjs -m $t 2>&1); rc=$?
     if [ $rc -eq 0 ]; then res "gjs:$t" PASS "$(echo "$out" | grep -E 'OK' | tail -1)"; else res "gjs:$t" FAIL "rc=$rc"; echo "$out" | tail -20; fi
 done
 if command -v node >/dev/null; then
-    (cd $EXT && node when.test.js >/dev/null 2>&1) && res node:when.test.js PASS || res node:when.test.js FAIL
+    for t in when.test.js quiet.test.js providers.test.js; do
+        (cd $EXT && TZ=Europe/Madrid node $t >/dev/null 2>&1) && res node:$t PASS || res node:$t FAIL
+    done
 else
     res node:when.test.js SKIP "sin node"
 fi
+
+# CLI (kaito check --json con changelog, doctor con proveedores, oferta de notify de Codex) y hooks.
+fresh $W/cli
+(cd $EXT && timeout 120 bash tests/cli.test.sh >$W/cli.log 2>&1) && res cli.test.sh PASS || { res cli.test.sh FAIL; tail -20 $W/cli.log; }
+for h in kaito-hook.py kaito-statusline.py kaito-codex-notify.py; do
+    python3 $EXT/hooks/$h --selftest >/dev/null 2>&1 && res hook:$h PASS || res hook:$h FAIL
+done
+# Iconos simbólicos que usa Kaito (luna de No molestar, cola) en el Adwaita de esta versión.
+for i in weather-clear-night-symbolic mail-unread-symbolic; do
+    find /usr/share/icons/Adwaita -name "$i.*" 2>/dev/null | grep -q . && res icon:$i PASS || res icon:$i FAIL
+done
 
 # 2. APIs nativas (typelibs de mutter/gnome-shell de esta versión).
 MUT=$(ls -d /usr/lib*/mutter-* /usr/lib/*/mutter-* 2>/dev/null | grep -oE '[0-9]+$' | sort -n | tail -1)

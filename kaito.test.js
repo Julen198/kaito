@@ -11,8 +11,10 @@ import {
     canDecide, agentsByTicket, shouldShowDaily, dailySummaryLines, localDay, warpTabToml, sortIssues, statusGroup,
     viewJql, visibleViews, normalizeCustomViews, projectsFromIssues, shortName, mapSearchIssue, RECENT_JQL,
     terminalMigration, resolveTerminal, gnomeTerminalArgv, kgxArgv, ptyxisExportsTab, terminalFocusLevel,
-    terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck,
+    terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck, changelogBody,
+    readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH,
 } from './common.js';
+import {queuePush} from './quiet.js';
 import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork} from './finish.js';
 import {parseTail, ticketFromHead, firstLine} from './agents.js';
 
@@ -517,7 +519,13 @@ if (GLib.find_program_in_path('git')) {
 }
 
 // Actualizaciones: salida de bin/kaito check --json / update con KAITO_UPDATE_FROM_SHELL=1
-eq(parseCheck('{"current":"0.1.0","latest":"0.2.0","behind":3}\n'), {behind: 3, latest: '0.2.0', current: '0.1.0'}, 'check con versión nueva');
+eq(parseCheck('{"current":"0.1.0","latest":"0.2.0","behind":3}\n'), {behind: 3, latest: '0.2.0', current: '0.1.0', changes: []}, 'check con versión nueva');
+eq(parseCheck('{"current":"0.3.0","latest":"0.4.0","behind":7,"changes":["Uno \\"a\\"","",3,"Dos","Tres","Cuatro","Cinco","Seis"]}').changes,
+    ['Uno "a"', 'Dos', 'Tres', 'Cuatro', 'Cinco'], 'check: changes filtrados (solo texto, máx. 5)');
+eq(changelogBody(['Uno', 'Dos', 'Tres', 'Cuatro', 'Cinco']), '• Uno\n• Dos\n• Tres\n… y 2 más', 'changelog: 3 líneas + resto');
+eq(changelogBody(['  Solo   uno ']), '• Solo uno', 'changelog: espacios');
+eq(changelogBody([]), 'Pulsa Actualizar para instalarla', 'changelog vacío');
+eq(changelogBody(['x'.repeat(200)]).length, 92, 'changelog: línea recortada');
 eq(parseCheck('{"current":"0.1.0","latest":null,"behind":0,"error":"fetch"}'), null, 'check sin red');
 eq(parseCheck('basura'), null, 'check ilegible');
 eq(parseUpdateMarker('==> Buscando\n  ✓ Actualizado a 0.2.0.\nkaito-update: version=0.2.0 relogin=1 updated=1\n'),
@@ -527,5 +535,26 @@ eq(parseUpdateMarker('sin marcador'), null, 'sin marcador');
 eq(firstErrorLine('\x1b[1;34m==>\x1b[0m Buscando\n  \x1b[31m✗\x1b[0m El checkout tiene cambios locales; no se actualiza:\n  M x'),
     'El checkout tiene cambios locales; no se actualiza:', 'primera línea de error');
 eq(firstErrorLine('fatal: no remote\n'), 'fatal: no remote', 'error de git');
+
+// Config nueva (0.4) y ficheros de estado: solo con XDG temporales (nunca la config real).
+if (GLib.get_user_config_dir().startsWith('/tmp') || CONFIG_PATH.includes('/scratchpad/')) {
+    let c = readConfig();
+    eq([c.jiraEnabled, c.workHours, c.dndManual, c.dndUntil, c.dndSilenceReminders, c.agentProviders.codex],
+        [true, {enabled: false, days: [1, 2, 3, 4, 5], start: '09:00', end: '18:00'}, false, null, false, true], 'config 0.4 por defecto');
+    updateConfig({jiraEnabled: false, workHours: {enabled: true, days: [6, 7], start: '22:00', end: '6:00'}, dndUntil: 'x',
+        agentProviders: {codex: false}});
+    c = readConfig();
+    eq([c.jiraEnabled, c.workHours, c.dndUntil, c.agentProviders.codex, c.agentProviders.claude],
+        [false, {enabled: true, days: [6, 7], start: '22:00', end: '06:00'}, null, false, true], 'config 0.4 guardada');
+    let q = queuePush([], {key: 'update', text: 'Kaito 0.4.0 disponible', action: {type: 'update'}});
+    q = queuePush(q, {key: 'update', text: 'Kaito 0.4.1 disponible', action: {type: 'update'}});
+    writeQuietQueue(q);
+    eq(readQuietQueue().map(x => x.text), ['Kaito 0.4.1 disponible'], 'cola persistida y deduplicada');
+    writeUpdateState({notified: '0.4.0'});
+    writeUpdateState({at: 1});
+    eq(readUpdateState(), {notified: '0.4.0', at: 1}, 'update.json conserva la versión avisada');
+} else {
+    print('(sin XDG temporales: se omiten las pruebas de config 0.4)');
+}
 
 print(`kaito.test.js: ${n} comprobaciones OK`);

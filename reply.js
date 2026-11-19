@@ -505,7 +505,7 @@ export class TaskResultModal extends Modal {
                 St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
                 copy.label = 'Copiado';
             });
-            if (task.key && this._hooks.comment) {
+            if (task.key && this._hooks.comment && (this._hooks.canComment?.() ?? true)) {
                 btn('Comentar en Jira', () => {
                     this.close();
                     this._hooks.comment(task, run);

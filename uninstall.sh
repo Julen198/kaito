@@ -81,6 +81,9 @@ if [ "$HOOKS" = 1 ]; then
       python3 "$MERGE" uninstall --settings "$SETTINGS" --apply >/dev/null; ok "Entradas quitadas"
     else warn "settings.json sin tocar."; fi
   fi
+  if grep -qs 'kaito-codex-notify' "$HOME/.codex/config.toml"; then
+    warn "Codex: quita a mano la línea notify = [... kaito-codex-notify.py] de ~/.codex/config.toml (no se edita automáticamente)."
+  fi
 fi
 
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/kaito"; CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/kaito"

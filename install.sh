@@ -8,7 +8,7 @@ DST="$HOME/.local/share/gnome-shell/extensions/$UUID"
 SETTINGS="$HOME/.claude/settings.json"
 MERGE="$SRC/hooks/merge-settings.py"
 
-COPY=0; YES=0; DRY=0; HOOKS=1; STATUS=ask
+COPY=0; YES=0; DRY=0; HOOKS=1; STATUS=ask; CODEX=1; CODEX_ONLY=0; CODEX_FORCE=0
 
 usage() {
   cat <<USO
@@ -16,6 +16,7 @@ Uso: ./install.sh [opciones]
   --copy            copia la carpeta en vez de enlazarla (no se actualiza con git pull)
   -y, --yes         no pregunta (acepta los hooks; la statusLine solo con --statusline)
   --no-hooks        no toca ~/.claude/settings.json
+  --no-codex        no ofrece el aviso al terminar de Codex (~/.codex/config.toml)
   --statusline      añade también la statusLine de Claude Code (si no tienes otra)
   --no-statusline   no ofrece la statusLine
   --dry-run         muestra lo que haría sin cambiar nada
@@ -29,6 +30,9 @@ for a in "$@"; do
     -y|--yes) YES=1 ;;
     --dry-run) DRY=1 ;;
     --no-hooks) HOOKS=0 ;;
+    --no-codex) CODEX=0 ;;
+    --codex-notify-only) CODEX_ONLY=1 ;;  # oculto: solo la sección de Codex (pruebas)
+    --yes-codex) CODEX_FORCE=1 ;;         # oculto: acepta la oferta de Codex sin preguntar
     --statusline) STATUS=yes ;;
     --no-statusline) STATUS=no ;;
     -h|--help) usage; exit 0 ;;
@@ -53,6 +57,84 @@ ask() {
   if ! { : </dev/tty; } 2>/dev/null; then warn "Sin terminal interactivo: se asume 'no' (usa --yes)."; return 1; fi
   read -r -p "  $q $hint " ans </dev/tty || return 1
   case "${ans:-}" in "") [ "$def" = y ] ;; [sSyY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Busca una CLI de agente: PATH y luego los directorios habituales. Imprime la ruta o nada.
+find_cli() {
+  local n="$1" p d
+  p="$(command -v "$n" 2>/dev/null || true)"
+  if [ -n "$p" ]; then echo "$p"; return 0; fi
+  for d in "$HOME/.local/bin" "$HOME/.npm-global/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin"; do
+    [ -x "$d/$n" ] && [ ! -d "$d/$n" ] && { echo "$d/$n"; return 0; }
+  done
+  while IFS= read -r d; do
+    [ -x "$d/bin/$n" ] && [ ! -d "$d/bin/$n" ] && { echo "$d/bin/$n"; return 0; }
+  done < <(ls -d "$HOME"/.nvm/versions/node/*/ 2>/dev/null | sed 's:/$::' | sort -rV)
+  for d in "$HOME/.cargo/bin" /usr/local/bin /usr/bin; do
+    [ -x "$d/$n" ] && [ ! -d "$d/$n" ] && { echo "$d/$n"; return 0; }
+  done
+  return 0
+}
+
+# Línea notify de primer nivel de ~/.codex/config.toml (antes de la primera [tabla]); vacío si no hay.
+codex_notify_line() {
+  [ -f "$1" ] || return 0
+  awk '/^[[:space:]]*\[/ {exit} /^[[:space:]]*notify[[:space:]]*=/ {print; exit}' "$1"
+}
+
+# Inserta "notify = [...]" justo antes de la primera tabla (o al final) conservando el resto byte a byte.
+codex_insert_notify() {
+  python3 - "$1" "$SRC/hooks/kaito-codex-notify.py" <<'PY'
+import json, re, sys
+path, hook = sys.argv[1], sys.argv[2]
+line = 'notify = ["python3", %s]\n' % json.dumps(hook)
+try:
+    with open(path, "rb") as f:
+        data = f.read()
+except FileNotFoundError:
+    data = b""
+m = re.search(rb"^[ \t]*\[", data, re.M)
+new = line.encode("utf-8")
+if m:
+    out = data[:m.start()] + new + b"\n" + data[m.start():]
+else:
+    out = data + (b"" if not data or data.endswith(b"\n") else b"\n") + new
+with open(path, "wb") as f:
+    f.write(out)
+PY
+}
+
+codex_section() {
+  info "Codex (aviso al terminar)"
+  local cfg="$HOME/.codex/config.toml" bin line snippet
+  bin="$(find_cli codex)"
+  if [ -z "$bin" ]; then ok "Codex no encontrado; nada que configurar."; return 0; fi
+  ok "Codex: $bin"
+  chmod +x "$SRC/hooks/kaito-codex-notify.py" 2>/dev/null || true
+  line="$(codex_notify_line "$cfg")"
+  snippet="notify = [\"python3\", \"$SRC/hooks/kaito-codex-notify.py\"]"
+  if [ -n "$line" ]; then
+    if grep -q 'kaito-codex-notify' <<<"$line"; then ok "aviso de Codex ya configurado"
+    else
+      warn "Ya tienes un programa notify en $cfg: no se toca."
+      warn "  Para añadir Kaito, llama a $SRC/hooks/kaito-codex-notify.py desde tu programa"
+      warn "  (recibe el mismo argumento JSON que reciba el tuyo) o sustituye tu línea por:"
+      echo "      $snippet"
+    fi
+    return 0
+  fi
+  echo "  Para que Kaito sepa cuándo Codex termina un turno, añade a $cfg (antes de la primera [sección]):"
+  echo "      $snippet"
+  if [ "$DRY" = 1 ]; then
+    echo "  [dry-run] se haría copia de $cfg y se insertaría esa línea (si aceptas)"
+  elif [ "$CODEX_FORCE" = 1 ] || ask "¿Añadir el aviso de Codex al terminar en ~/.codex/config.toml (se hace copia de seguridad)?" n; then
+    mkdir -p "$HOME/.codex"
+    if [ -f "$cfg" ]; then
+      local bak="$cfg.bak-kaito-$(date +%Y%m%d-%H%M%S)"
+      cp -p "$cfg" "$bak"; ok "Copia de seguridad: $bak"
+    fi
+    codex_insert_notify "$cfg"; ok "Aviso de Codex añadido a $cfg"
+  else warn "Aviso de Codex omitido. Puedes añadir la línea a mano o repetir con ./install.sh"; fi
 }
 
 # Terminal que elegiría terminal='auto' (mismo orden que common.js resolveTerminal) y nivel de foco.
@@ -81,6 +163,7 @@ print(t if t in ("auto","ptyxis","gnome-terminal","kgx","warp","warp-window") el
 }
 
 [ "$DRY" = 1 ] && info "Modo --dry-run: no se cambia nada."
+if [ "$CODEX_ONLY" = 1 ]; then codex_section; exit 0; fi
 
 # ---------------------------------------------------------------- requisitos
 info "Comprobando requisitos"
@@ -174,6 +257,9 @@ else: print(1)' "$SETTINGS")"
 else
   info "Hooks omitidos (--no-hooks)"
 fi
+
+# --------------------------------------------------------------------- codex
+if [ "$CODEX" = 1 ]; then codex_section; else info "Codex omitido (--no-codex)"; fi
 
 # --------------------------------------------------------------- habilitar
 info "Habilitando la extensión"

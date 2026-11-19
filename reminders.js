@@ -15,12 +15,19 @@ const TOP = 70;
 const DAILY_ID = '__daily'; // tarjeta del resumen del día (no es un recordatorio)
 const FIN_PREFIX = '__fin:'; // tarjetas "<KEY> listo" (agente que terminó un ticket)
 const TASK_PREFIX = '__task:'; // tarjetas "Tarea «…» · terminada/falló" (tareas programadas)
+const QUEUED_ID = '__quiet'; // tarjeta "Mientras no estabas" (avisos retenidos por No molestar)
+const QUEUED_SHOWN = 12;
 
 /** Tarjetas de recordatorios vencidos. No son modales: no roban el teclado. */
 export class ReminderManager {
-    /** @param {() => void} onChange se llama tras posponer o completar */
-    constructor(onChange) {
+    /**
+     * @param {() => void} onChange se llama tras posponer o completar
+     * @param {{quiet?: () => ({quiet: boolean, holdReminders: boolean}|null)}} opts quiet: estado de No molestar
+     *   (sin sonido; con holdReminders los recordatorios esperan a que termine)
+     */
+    constructor(onChange, opts = {}) {
         this._onChange = onChange;
+        this._quiet = opts.quiet ?? (() => null);
         this._cards = new Map(); // id -> actor
         this._box = null;
         this.check();
@@ -33,6 +40,8 @@ export class ReminderManager {
 
     /** Muestra los vencidos (no hechos) que aún no tienen tarjeta. */
     check() {
+        if (this._quiet()?.holdReminders)
+            return; // No molestar con "Silenciar también recordatorios": salen al terminar
         const now = Date.now();
         const due = readReminders()
             .filter(r => r.id && !r.done && new Date(r.due).getTime() <= now)
@@ -56,6 +65,8 @@ export class ReminderManager {
     }
 
     _beep() {
+        if (this._quiet()?.quiet)
+            return;
         try {
             global.display.get_sound_player().play_from_theme('complete', 'Recordatorio', null);
         } catch (e) {
@@ -261,6 +272,52 @@ export class ReminderManager {
         this._cards.set(cid, card);
         this._box.add_child(card);
         this._beep();
+    }
+
+    /**
+     * "Mientras no estabas": una tarjeta con los avisos retenidos por No molestar. items: [{text, action?}];
+     * onItem(item) abre su acción (si la tiene, la línea es un botón). Sin sonido.
+     */
+    showQueued(items, onItem = null) {
+        this._removeCard(QUEUED_ID);
+        if (!items?.length)
+            return;
+        this._ensureBox();
+        const card = new St.BoxLayout({style_class: 'kaito-reminder kaito-daily kaito-queued', reactive: true});
+        card.add_child(new St.Bin({
+            style_class: 'kaito-reminder-icon kaito-daily-icon', y_align: Clutter.ActorAlign.START,
+            child: new St.Icon({icon_name: 'mail-unread-symbolic', icon_size: 20}),
+        }));
+        const col = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'kaito-reminder-col'});
+        col.add_child(new St.Label({style_class: 'kaito-reminder-meta', text: `${items.length} ${items.length === 1 ? 'aviso' : 'avisos'}`}));
+        col.add_child(new St.Label({style_class: 'kaito-reminder-title', text: 'Mientras no estabas'}));
+        const close = () => this._removeCard(QUEUED_ID);
+        for (const it of items.slice(-QUEUED_SHOWN)) {
+            const l = new St.Label({style_class: 'kaito-daily-line', text: `• ${it.text}`});
+            l.clutter_text.line_wrap = true;
+            l.clutter_text.line_wrap_mode = 2; // Pango.WrapMode.WORD_CHAR
+            if (it.action && onItem) {
+                const b = new St.Button({style_class: 'kaito-queued-item', child: l, can_focus: true, track_hover: true,
+                    x_expand: true, x_align: Clutter.ActorAlign.FILL});
+                b.connect('clicked', () => {
+                    close();
+                    onItem(it);
+                });
+                col.add_child(b);
+            } else {
+                col.add_child(l);
+            }
+        }
+        if (items.length > QUEUED_SHOWN)
+            col.add_child(new St.Label({style_class: 'kaito-daily-line kaito-muted', text: `… y ${items.length - QUEUED_SHOWN} más`}));
+        const buttons = new St.BoxLayout({style_class: 'kaito-reminder-buttons', x_align: Clutter.ActorAlign.END});
+        const ok = new St.Button({style_class: 'kaito-reminder-btn kaito-daily-ok', label: 'Entendido', can_focus: true});
+        ok.connect('clicked', close);
+        buttons.add_child(ok);
+        col.add_child(buttons);
+        card.add_child(col);
+        this._cards.set(QUEUED_ID, card);
+        this._box.insert_child_at_index(card, 0);
     }
 
     _act(id, fn) {

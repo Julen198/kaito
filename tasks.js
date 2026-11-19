@@ -433,7 +433,7 @@ export async function runTask(task, {cancellable = null, session = null, bin = n
         if (!GLib.file_test(cwd, GLib.FileTest.IS_DIR))
             throw new Error(`La carpeta ${task.cwd} no existe`);
         let ticket = null;
-        if (task.key) {
+        if (task.key && readConfig().jiraEnabled) { // con Jira desactivado la tarea corre sin el contexto del ticket
             session ??= new Soup.Session({timeout: 20});
             ticket = await gatherTicket(task.key, cwd, {session, cancellable});
         }

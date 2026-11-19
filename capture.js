@@ -44,10 +44,14 @@ const ST_CHIP_HOVER = 'background-color: rgba(255,255,255,0.18); border-radius: 
 
 const lbl = (text, cls = '') => new St.Label({text, style_class: cls, y_align: Clutter.ActorAlign.CENTER});
 
+/** Pestañas disponibles: sin Jira si está desactivado en Ajustes. */
+const activeModes = () => (readConfig().jiraEnabled ? MODES : MODES.filter(m => m.id !== 'jira'));
+
 /** captureMode crudo: readConfig() solo conoce note/reminder. */
-function savedMode() {
+function savedMode(modes = MODES) {
     const raw = readJson(CONFIG_PATH, {})?.captureMode;
-    return MODES.some(m => m.id === raw) ? raw : readConfig().captureMode;
+    const mode = modes.some(m => m.id === raw) ? raw : readConfig().captureMode;
+    return modes.some(m => m.id === mode) ? mode : 'note';
 }
 
 /** "## Título" → negrita; el resto, escapado. */
@@ -85,7 +89,8 @@ export class CaptureModal {
         if (!mon)
             return;
 
-        this._mode = MODES.some(m => m.id === mode) ? mode : savedMode();
+        this._modes = activeModes();
+        this._mode = this._modes.some(m => m.id === mode) ? mode : savedMode(this._modes);
         this._jira = {stage: 'input'};
         this._task = {stage: 'input'};
         const overlay = new St.Widget({
@@ -160,7 +165,7 @@ export class CaptureModal {
     _buildTabs() {
         const row = new St.BoxLayout({style_class: 'kaito-capture-top'});
         this._tabs = {};
-        for (const m of MODES) {
+        for (const m of this._modes) {
             const content = new St.BoxLayout({style_class: 'kaito-capture-tab-content'});
             const icon = m.file
                 ? {gicon: new Gio.FileIcon({file: Gio.File.new_for_path(GLib.build_filenamev([this._extensionDir, 'icons', m.file]))})}
@@ -230,9 +235,10 @@ export class CaptureModal {
         case Clutter.KEY_ISO_Left_Tab: {
             if (stage !== 'input')
                 return Clutter.EVENT_STOP;
-            const i = MODES.findIndex(m => m.id === this._mode);
-            const step = sym === Clutter.KEY_ISO_Left_Tab ? MODES.length - 1 : 1;
-            this._setMode(MODES[(i + step) % MODES.length].id);
+            const modes = this._modes;
+            const i = modes.findIndex(m => m.id === this._mode);
+            const step = sym === Clutter.KEY_ISO_Left_Tab ? modes.length - 1 : 1;
+            this._setMode(modes[(i + step) % modes.length].id);
             return Clutter.EVENT_STOP;
         }
         default:
@@ -257,7 +263,7 @@ export class CaptureModal {
     }
 
     _applyMode() {
-        for (const m of MODES) {
+        for (const m of this._modes) {
             if (m.id === this._mode)
                 this._tabs[m.id].add_style_class_name('selected');
             else

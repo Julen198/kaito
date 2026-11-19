@@ -25,7 +25,11 @@ import {
     CLAUDE_USAGE_PATH, readClaudeUsage, readCodexUsage, usageView,
     fetchJiraJql, visibleViews, viewJql, projectsFromIssues, resolveProjects, shortName, migrateTerminalOnce,
     processChain, terminalFocusTarget, cancelPendingUris,
+    installedProviders, collectOtherAgents, changelogBody, readUpdateState, writeUpdateState,
 } from './common.js';
+import {QuietController} from './dnd.js';
+import {PROVIDER_BY_ID} from './providers.js';
+import {quietLabel} from './quiet.js';
 import {detectWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
 import {fetchTransitions, applyTransition, pickTransition, REVIEW_RE, assignToMe, fetchMyself} from './jiradraft.js';
 import {ReminderManager} from './reminders.js';
@@ -261,6 +265,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 const wrap = new PopupMenu.PopupMenuSection();
                 wrap.actor.add_child(this._jiraScroll);
                 this.menu.addMenuItem(wrap);
+                this._jiraWrap = wrap;
                 this._applyMenuCap();
             } else {
                 this.menu.addMenuItem(this._sections[id]);
@@ -269,8 +274,12 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._buildEntry();
         this._renderJiraTabs();
         // Aviso de versión nueva, arriba del todo (oculto si no hay o si no es un checkout de git).
-        this._update = new UpdateNotice(extension);
+        this._update = new UpdateNotice(extension, {
+            onState: n => this._syncUpdateBadge(n),
+            onAvailable: c => this._onUpdateAvailable(c),
+        });
         this.menu.addMenuItem(this._update.item, 0);
+        this._syncUpdateBadge(this._update);
 
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
@@ -357,6 +366,13 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
     _buildPanel() {
         const box = new St.BoxLayout({style_class: 'kaito-panel', y_align: Clutter.ActorAlign.CENTER});
+        this._panelBox = box;
+        // No molestar: luna delante de los contadores (y el indicador algo atenuado).
+        this._moon = new St.Icon({
+            icon_name: 'weather-clear-night-symbolic', icon_size: 14, visible: false,
+            style_class: 'kaito-icon kaito-moon', y_align: Clutter.ActorAlign.CENTER,
+        });
+        box.add_child(this._moon);
         this._seg = {};
         for (const id of ['agents', 'jira', 'todos']) {
             const seg = new St.BoxLayout({style_class: 'kaito-seg', y_align: Clutter.ActorAlign.CENTER});
@@ -375,7 +391,53 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._mini.track.x_expand = false;
         this._mini.track.visible = false;
         box.add_child(this._mini.track);
+        // Punto de "hay versión nueva", arriba a la derecha del indicador, hasta actualizar.
+        this._badge = new St.Widget({style_class: 'kaito-update-badge', visible: false, y_align: Clutter.ActorAlign.START});
+        box.add_child(this._badge);
         this.add_child(box);
+    }
+
+    /** Punto del panel según el aviso de actualización. */
+    _syncUpdateBadge(notice) {
+        this._updatePending = !!notice?.pending;
+        this._badge.visible = this._updatePending;
+        if (this._update)
+            this._updateLabel();
+    }
+
+    /** Versión nueva: una notificación por versión (update.json), retenida si hay No molestar. */
+    _onUpdateAvailable(c) {
+        const version = c.latest ?? '?';
+        try {
+            if (readUpdateState().notified === version)
+                return;
+            writeUpdateState({notified: version, at: Date.now()});
+        } catch (e) {
+            console.warn(`kaito: update.json: ${e.message}`);
+        }
+        const title = `Kaito ${version} disponible`;
+        if (this._ext.quiet?.defer({key: 'update', text: title, action: {type: 'update'}}))
+            return;
+        const update = () => this._update?.update().catch(e => console.warn(`kaito: actualizar: ${e.message}`));
+        this._notify(title, changelogBody(c.changes), {
+            activate: update,
+            actions: [['Actualizar', update], ['Más tarde', () => {}]],
+        });
+    }
+
+    /** Estado de No molestar en el panel y en el menú. */
+    syncQuiet(q = this._ext.quiet?.state) {
+        const quiet = !!q?.quiet;
+        this._moon.visible = quiet;
+        this._panelBox.opacity = quiet ? 170 : 255;
+        if (this._dnd) {
+            this._dnd.sw.setToggleState(q?.reason === 'manual');
+            const text = quiet ? quietLabel(q, new Date()) : 'Avisos activados';
+            this._dnd.status.set_text(text);
+            this._dnd.off.visible = quiet;
+        }
+        if (this._update)
+            this._updateLabel();
     }
 
     _headerRow(title) {
@@ -432,10 +494,39 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this.menu.addMenuItem(capture);
         this.syncShortcutLabel();
 
+        this._buildDnd();
+
         const prefs = new PopupMenu.PopupMenuItem('Ajustes');
         prefs.add_style_class_name('kaito-settings');
         prefs.connect('activate', () => this._ext.openPreferences());
         this.menu.addMenuItem(prefs);
+    }
+
+    /** "No molestar": interruptor (manual, sin límite) + 1 h, Hasta mañana y Desactivar. */
+    _buildDnd() {
+        const sw = new PopupMenu.PopupSwitchMenuItem('No molestar', false);
+        sw.add_style_class_name('kaito-dnd');
+        sw.connect('toggled', (_i, on) => this._ext.quiet?.set(on ? 'on' : 'off'));
+        this.menu.addMenuItem(sw);
+        const row = staticItem();
+        row.add_style_class_name('kaito-dnd-row');
+        const status = ellipsized(mkLabel('', 'kaito-muted kaito-dnd-status'));
+        row.add_child(status);
+        const btn = (label, mode) => {
+            const b = new St.Button({
+                label, style_class: 'kaito-dnd-btn', can_focus: true, track_hover: true,
+                y_align: Clutter.ActorAlign.CENTER, accessible_name: `No molestar: ${label}`,
+            });
+            b.connect('clicked', () => this._ext.quiet?.set(mode));
+            row.add_child(b);
+            return b;
+        };
+        btn('1 h', 'hour');
+        btn('Hasta mañana', 'tomorrow');
+        const off = btn('Desactivar', 'off');
+        this.menu.addMenuItem(row);
+        this._dnd = {sw, status, off};
+        this.syncQuiet();
     }
 
     syncShortcutLabel() {
@@ -461,7 +552,18 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
     _loadAgents() {
         try {
-            const agents = collectAgents(this._cfg.agentWindowMinutes * 60, readAgentStates(), this._cfg.liveSeconds);
+            const states = readAgentStates();
+            const on = this._cfg.agentProviders;
+            const agents = on.claude ? collectAgents(this._cfg.agentWindowMinutes * 60, states, this._cfg.liveSeconds) : [];
+            // Codex, Gemini…: solo los instalados y activados en Ajustes (sin ninguno no se mira /proc).
+            const others = installedProviders().filter(p => p.id !== 'claude' && p.installed && on[p.id]).map(p => p.id);
+            if (others.length) {
+                try {
+                    agents.push(...collectOtherAgents(others, states, this._cfg.liveSeconds));
+                } catch (e) {
+                    console.warn(`kaito: agentes de ${others.join(', ')}: ${e.message}`);
+                }
+            }
             agents.sort((a, b) => agentRank(a) - agentRank(b) || a.age - b.age);
             const d = applyDismissed(agents, readDismissed());
             if (d.changed)
@@ -497,6 +599,13 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const fresh = agents.filter(a => now.has(a.id) && !prev.has(a.id));
         if (!fresh.length)
             return;
+        if (this._ext.quiet?.quiet) {
+            if (this._cfg.notifyNeeds) {
+                for (const a of fresh)
+                    this._ext.quiet.defer({key: `needs:${a.id}`, text: `${a.cwd ?? '?'} te necesitaba`, action: {type: 'agent', id: a.id}});
+            }
+            return;
+        }
         this._pulse();
         if (!this._cfg.notifyNeeds)
             return;
@@ -593,8 +702,11 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             console.warn(`kaito: finished.json: ${e.message}`);
         }
         const issue = this._jira.issues.find(i => i.key === a.ticket);
+        const jira = this._cfg.jiraEnabled; // sin Jira: tarjeta con lo de git, sin mover el ticket
         let moved = null, reason = null;
-        if (issue && REVIEW_RE.test(issue.status)) {
+        if (!jira) {
+            // nada que mover
+        } else if (issue && REVIEW_RE.test(issue.status)) {
             reason = `ya estaba en ${issue.status}`;
         } else {
             try {
@@ -625,20 +737,24 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         }
         this._ext.showFinished({
             id: key,
+            agentId: a.id,
             title: `${a.ticket} listo`,
             meta: `${a.cwd ?? '?'} · ${mins} min`,
             lines: finishLines({work, moved, reason, lastText: a.lastText, remindAt}),
             prUrl: work.pushed ? prUrl(work.remote, work.branch) : null,
             onFocus: Number.isInteger(a.pid) ? () => this.focusAgent(a) : null,
-            onSchedule: () => this._ext.openTaskCapture(REVIEW_PREFILL(a.ticket)),
+            onSchedule: jira ? () => this._ext.openTaskCapture(REVIEW_PREFILL(a.ticket)) : null,
         });
         if (moved)
             this._refresh();
     }
 
     async _notifyDone(a, mins) {
+        const title = `${a.cwd ?? '?'} terminó · ${mins} min`;
+        if (this._ext.quiet?.defer({key: `done:${a.id}`, text: title, action: {type: 'agent', id: a.id}}))
+            return;
         const actions = [['Ir al agente', () => this.focusAgent(a)]];
-        if (a.ticket) {
+        if (a.ticket && this._cfg.jiraEnabled) {
             actions.push(['Comentar en Jira', () => this._ext.openComment(a, this._issueSummary(a.ticket))]);
             try {
                 const t = pickTransition(await fetchTransitions(this._session, a.ticket), 'review');
@@ -650,7 +766,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             if (this._cancellable.is_cancelled())
                 return;
         }
-        this._notify(`${a.cwd ?? '?'} terminó · ${mins} min`, firstLine(a.lastText) || DONE_MSG,
+        this._notify(title, firstLine(a.lastText) || DONE_MSG,
             {activate: actions[0][1], actions});
     }
 
@@ -752,8 +868,11 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             return [this._emptySpec(`Error: ${this._agentsError}`)];
         if (!this._agents.length)
             return [this._emptySpec('Ningún agente trabajando ahora')];
+        // Chip del proveedor: siempre en los que no son Claude; en Claude solo si hay mezcla.
+        const mixed = new Set(this._agents.map(a => a.provider ?? 'claude')).size > 1;
         return this._agents.map(a => {
             const needs = a.state === 'needs';
+            const provider = a.provider ?? 'claude';
             const color = needs ? C.needs : a.state !== 'done' && a.live ? C.live : C.idle;
             const col = new St.BoxLayout({vertical: true, x_expand: true});
             const top = new St.BoxLayout({x_expand: true});
@@ -762,13 +881,17 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             if (needs)
                 top.add_child(mkLabel('Te necesita', 'kaito-pill kaito-pill-needs'));
             top.add_child(mkLabel(a.cwd ?? '?', 'kaito-repo'));
+            if (provider !== 'claude' || mixed)
+                top.add_child(mkLabel(PROVIDER_BY_ID[provider]?.name ?? provider, `kaito-provider kaito-provider-${provider}`));
             if (a.ticket)
                 top.add_child(mkLabel(a.ticket, 'kaito-key kaito-key-chip'));
             top.add_child(spacer());
-            top.add_child(mkLabel(ago(a.age), 'kaito-muted'));
+            top.add_child(mkLabel(a.state === 'open' ? 'abierto' : ago(a.age), 'kaito-muted'));
             col.add_child(top);
             const line = needs ? (a.message ?? 'Te necesita')
-                : a.state === 'done' ? DONE_MSG : (a.lastAction ?? '(sin acción)');
+                : a.state === 'open' ? `abierto en ${a.cwdPath ? a.cwdPath.replace(GLib.get_home_dir(), '~') : '?'}`
+                    : a.state === 'done' ? (provider !== 'claude' && a.lastText ? `Terminó: ${a.lastText}` : DONE_MSG)
+                        : (a.lastAction ?? '(sin acción)');
             col.add_child(ellipsized(mkLabel(line, needs
                 ? 'kaito-action kaito-needs-msg' : 'kaito-muted kaito-action')));
             const side = needs ? null : sideButton('Ocultar', new St.Label({text: '×', style_class: 'kaito-side-x'}),
@@ -1196,7 +1319,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
     /** Pestañas visibles si hay más de una vista y no se está eligiendo repo. */
     _syncTabsVisible() {
-        const show = this._tabButtons.length > (this._cardJiraTabs ? 2 : 1) && !this._jiraPick && !this._jira.setup;
+        const show = this._cfg.jiraEnabled && this._tabButtons.length > (this._cardJiraTabs ? 2 : 1) && !this._jiraPick && !this._jira.setup;
         this._jiraTabsItem.visible = show;
         if (this._cardJiraTabs)
             this._cardJiraTabs.visible = show;
@@ -1239,7 +1362,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     /** Descarga la vista `id` (no "Mías") y la pinta si sigue activa. */
     async _fetchView(id) {
         const v = visibleViews(this._cfg).find(x => x.id === id);
-        if (!v || id === 'mine')
+        if (!v || id === 'mine' || !this._cfg.jiraEnabled)
             return;
         const st = this._views[id] ??= {issues: [], base: this._jira.base, error: null, msg: null, loading: true, fetching: false, t: 0};
         if (st.fetching)
@@ -1293,12 +1416,14 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
     /** Firma de la config sin jiraView: cambiar de pestaña no debe disparar un refresco de red. */
     _configSig() {
-        const {jiraView: _v, ...rest} = readJson(CONFIG_PATH, {}) ?? {};
+        // Tampoco No molestar: activarlo no tiene nada que ver con Jira.
+        const {jiraView: _v, dndManual: _m, dndUntil: _u, dndSkipUntil: _s, ...rest} = readJson(CONFIG_PATH, {}) ?? {};
         return JSON.stringify(rest);
     }
 
     _onConfigChanged() {
         this._update?.onConfig();
+        this._ext.quiet?.tick();
         const sig = this._configSig();
         if (sig === this._cfgSig) {
             this.refreshLocal();
@@ -1755,6 +1880,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 js.set_style(`max-height: ${JIRA_MAX_H}px;`);
                 js.set_child(this._cardSec[id]);
                 body.add_child(js);
+                this._cardJiraScroll = js;
             } else {
                 body.add_child(this._cardSec[id]);
             }
@@ -1772,6 +1898,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             this._renderCard(id, this._specs(id));
         this._syncUsageVisible();
         this._syncTasksVisible();
+        this._syncJiraVisible();
         this._placeCard();
         this._updateCardVisibility();
         this._updateLabel();
@@ -1785,6 +1912,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._cardHeaders = null;
         this._cardScroll = null;
         this._cardJiraTabs = null;
+        this._cardJiraScroll = null;
         card.disconnect(this._cardWidthId);
         Main.layoutManager.removeChrome(card);
         card.destroy();
@@ -1798,6 +1926,19 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._card.set_position(mon.x + mon.width - w - CARD_MARGIN, mon.y + Main.panel.height + 8);
         // ~70 % del alto del monitor, descontando la cabecera de la tarjeta.
         this._cardScroll.set_style(`max-height: ${Math.floor(mon.height * 0.7) - 56}px;`);
+    }
+
+    /** Jira desactivado en Ajustes: fuera la sección (menú y tarjeta), sus pestañas y el contador del panel. */
+    _syncJiraVisible() {
+        const on = this._cfg.jiraEnabled;
+        this._headers.jira.visible = on;
+        this._jiraWrap.actor.visible = on;
+        this._seg.jira.seg.visible = on;
+        if (this._card) {
+            this._cardHeaders.jira.visible = on;
+            this._cardJiraScroll.visible = on;
+        }
+        this._syncTabsVisible();
     }
 
     _updateCardVisibility() {
@@ -1836,8 +1977,10 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             this.remove_style_class_name('kaito-attention');
         this.accessible_name = `Kaito: ${c.agents} agentes`
             + (needs ? `, ${needs} ${needs === 1 ? 'te necesita' : 'te necesitan'}` : '')
-            + `, ${c.jira} tickets, ${c.todos} pendientes`
-            + (five ? `, Claude 5 h ${Math.round(five.pct)} %` : '');
+            + (this._cfg.jiraEnabled ? `, ${c.jira} tickets` : '') + `, ${c.todos} pendientes`
+            + (five ? `, Claude 5 h ${Math.round(five.pct)} %` : '')
+            + (this._ext.quiet?.quiet ? ', no molestar' : '')
+            + (this._updatePending ? ', actualización disponible' : '');
     }
 
     /** Todo lo local (agentes, pendientes, config); sin red. */
@@ -1854,6 +1997,17 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             this._renderJiraTabs();
             if (this._jiraView !== prev)
                 this._renderSection('jira');
+        }
+        if (this._jiraOn !== this._cfg.jiraEnabled) {
+            this._jiraOn = this._cfg.jiraEnabled;
+            if (!this._jiraOn) {
+                this._jira = {issues: []};
+                this._views = {};
+                this._jiraExpand = null;
+                this._jiraPick = null;
+            }
+            this._syncJiraVisible();
+            this._renderSection('jira');
         }
         this._renderSection('usage');
         this._renderSection('agents');
@@ -1872,6 +2026,11 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this.refreshLocal();
         if (this._fetching)
             return;
+        if (!this._cfg.jiraEnabled) { // Jira desactivado: nada de red
+            this._jiraLoaded = true;
+            this._maybeDaily();
+            return;
+        }
         this._fetching = true;
         try {
             const r = await fetchJira(this._session);
@@ -1898,6 +2057,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     _maybeDaily() {
         if (!this._cfg.dailySummary || this._jira.error)
             return; // con Jira caído se reintenta en el siguiente refresco
+        if (this._ext.quiet?.quiet)
+            return; // con No molestar no se marca como visto: sale en el primer refresco al terminar
         const now = new Date();
         if (!shouldShowDaily(readDailyDay(), now))
             return;
@@ -1907,7 +2068,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             console.error(`kaito: no se pudo guardar daily.json: ${e.message}`);
             return;
         }
-        const lines = dailySummaryLines({issues: this._jira.issues, reminders: readReminders(), agents: this._agents, now});
+        const lines = dailySummaryLines({issues: this._jira.issues, reminders: readReminders(),
+            agents: this._agents.filter(a => a.state !== 'open'), now}); // sin estado (Gemini…): no "esperan"
         if (lines.length)
             this._ext.showDaily(lines);
     }
@@ -1992,11 +2154,22 @@ export default class KaitoMain {
             console.warn(`kaito: migración de terminal: ${e.message}`);
         }
         this._settings = this.getSettings();
+        // No molestar antes que el indicador (el menú y el panel lo consultan al construirse).
+        this.quiet = new QuietController({
+            onChange: q => {
+                this._indicator?.syncQuiet(q);
+                this._reminders?.check(); // recordatorios retenidos: salen al terminar el silencio
+            },
+            onFlush: items => this._showQueued(items),
+        });
         this._capture = new CaptureModal(() => {
             this._indicator?.refreshLocal();
             this._tickTasks();
         }, {issueSummary: key => this._indicator?._issueSummary(key) ?? '', extensionDir: this.path});
-        this._taskResult = new TaskResultModal({comment: (task, run) => this.commentTask(task, run)});
+        this._taskResult = new TaskResultModal({
+            comment: (task, run) => this.commentTask(task, run),
+            canComment: () => readConfig().jiraEnabled,
+        });
         this.tasks = new TaskScheduler({
             onStart: () => this._indicator?._renderSection('tasks'),
             onFinish: (task, run) => this._onTaskFinish(task, run),
@@ -2012,7 +2185,9 @@ export default class KaitoMain {
         this._indicator = new (indicatorClass(this.loadId))(this);
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         // Tras crear el indicador: así, al vencerse algo, la lista del menú ya está montada.
-        this._reminders = new ReminderManager(() => this._indicator?.refreshLocal());
+        this._reminders = new ReminderManager(() => this._indicator?.refreshLocal(), {
+            quiet: () => this.quiet && {quiet: this.quiet.quiet, holdReminders: this.quiet.holdReminders},
+        });
 
         this._taskTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TASK_TICK_S, () => {
             this._tickTasks();
@@ -2052,11 +2227,42 @@ export default class KaitoMain {
     _onTaskFinish(task, run) {
         this._indicator?._renderSection('tasks');
         this._indicator?._updateLabel();
+        if (this.quiet?.defer({key: `task:${task.id}`, text: `Tarea «${task.name}» · ${run.ok ? 'terminada' : 'falló'}`,
+            action: {type: 'task', id: task.id}}))
+            return;
         this._reminders?.showTaskResult({
             id: task.id, name: task.name, ok: run.ok, summary: run.summary, key: task.key,
             onView: () => this.openTaskResult(task, run),
-            onComment: task.key ? () => this.commentTask(task, run) : null,
+            onComment: task.key && readConfig().jiraEnabled ? () => this.commentTask(task, run) : null,
         });
+    }
+
+    /** Fin del silencio: una tarjeta "Mientras no estabas" con todo lo retenido. */
+    _showQueued(items) {
+        this._reminders?.showQueued(items, it => this._queuedAction(it.action));
+    }
+
+    /** Acción de una línea de "Mientras no estabas": {type: 'agent'|'task'|'update', id?}. */
+    _queuedAction(action) {
+        const ind = this._indicator;
+        if (action?.type === 'agent') {
+            const a = ind?._agents.find(x => x.id === action.id);
+            if (a?.state === 'needs')
+                this.openReply(a);
+            else if (a && Number.isInteger(a.pid))
+                ind.focusAgent(a);
+        } else if (action?.type === 'task') {
+            let task = null;
+            try {
+                task = readTasks().find(t => t.id === action.id) ?? null;
+            } catch (e) {
+                console.warn(`kaito: tareas: ${e.message}`);
+            }
+            if (task)
+                this.openTaskResult(task);
+        } else if (action?.type === 'update') {
+            ind?._update?.update().catch(e => console.warn(`kaito: actualizar: ${e.message}`));
+        }
     }
 
     /** Captura en la pestaña Tarea, con texto inicial (p. ej. "RUN-1: revisa que "). */
@@ -2113,6 +2319,9 @@ export default class KaitoMain {
     }
 
     showFinished(info) {
+        if (this.quiet?.defer({key: `fin:${info.id}`, text: `${info.title} · ${info.meta}`,
+            action: info.agentId ? {type: 'agent', id: info.agentId} : null}))
+            return;
         this._reminders?.showFinished(info);
     }
 
@@ -2140,6 +2349,8 @@ export default class KaitoMain {
         this._reminders = null;
         this._indicator?.destroy();
         this._indicator = null;
+        this.quiet?.destroy();
+        this.quiet = null;
         cancelPendingUris();
         this._settings = null;
     }

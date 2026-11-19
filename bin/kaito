@@ -33,8 +33,8 @@ Uso: kaito <comando>
   update [--yes] [--force]   actualiza Kaito a la última versión y la recarga en caliente
   reload                     recarga el código de la extensión sin cerrar sesión
   version                    versión instalada
-  check [--json]             ¿hay versión nueva? (rápido, silencioso sin red)
-  doctor                     diagnóstico de la instalación
+  check [--json]             ¿hay versión nueva y qué cambia? (rápido, silencioso sin red)
+  doctor                     diagnóstico de la instalación y de los agentes detectados
   uninstall [--purge] [--yes] desinstala (con --purge borra también el código y los datos)
   help                       esta ayuda
 USO
@@ -88,6 +88,13 @@ cmd_version() {
   echo "Kaito $(version) ($sha, $date)"
 }
 
+# Hasta 5 asuntos de commit pendientes de bajar, uno por línea.
+changes_lines() { g log --format=%s -n 5 'HEAD..@{u}' 2>/dev/null || true; }
+changes_json() {
+  changes_lines | python3 -c 'import json,sys
+print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()], ensure_ascii=False))' 2>/dev/null || echo '[]'
+}
+
 cmd_check() {
   local json=0; [ "${1:-}" = "--json" ] && json=1
   need_git
@@ -95,14 +102,16 @@ cmd_check() {
   cur="$(version)"
   netgit fetch --quiet origin >/dev/null 2>&1 || err=1
   if [ "$err" = 1 ]; then
-    if [ "$json" = 1 ]; then printf '{"current":"%s","latest":null,"behind":0,"error":"fetch"}\n' "$cur"
+    if [ "$json" = 1 ]; then printf '{"current":"%s","latest":null,"behind":0,"changes":[],"error":"fetch"}\n' "$cur"
     else echo "no se pudo comprobar"; fi
     return 0
   fi
   behind="$(behind_count)"
   latest="$(g show '@{u}:VERSION' 2>/dev/null | tr -d '[:space:]')"; latest="${latest:-$cur}"
-  if [ "$json" = 1 ]; then printf '{"current":"%s","latest":"%s","behind":%s}\n' "$cur" "$latest" "$behind"
-  elif [ "$behind" -gt 0 ]; then echo "hay versión nueva: $latest"
+  if [ "$json" = 1 ]; then printf '{"current":"%s","latest":"%s","behind":%s,"changes":%s}\n' "$cur" "$latest" "$behind" "$(changes_json)"
+  elif [ "$behind" -gt 0 ]; then
+    echo "hay versión nueva: $latest"
+    changes_lines | sed 's/^/  - /'
   else echo "al día"; fi
   return 0
 }
@@ -151,6 +160,58 @@ cmd_update() {
   marker "$relogin" 1
 }
 
+# Busca una CLI de agente: PATH y luego los directorios habituales (la extensión no hereda tu PATH).
+# Imprime la ruta o nada.
+find_cli() {
+  local n="$1" p d
+  p="$(command -v "$n" 2>/dev/null || true)"
+  if [ -n "$p" ]; then echo "$p"; return 0; fi
+  for d in "$HOME/.local/bin" "$HOME/.npm-global/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin"; do
+    [ -x "$d/$n" ] && [ ! -d "$d/$n" ] && { echo "$d/$n"; return 0; }
+  done
+  # nvm: versiones más nuevas primero
+  while IFS= read -r d; do
+    [ -x "$d/bin/$n" ] && [ ! -d "$d/bin/$n" ] && { echo "$d/bin/$n"; return 0; }
+  done < <(ls -d "$HOME"/.nvm/versions/node/*/ 2>/dev/null | sed 's:/$::' | sort -rV)
+  for d in "$HOME/.cargo/bin" /usr/local/bin /usr/bin; do
+    [ -x "$d/$n" ] && [ ! -d "$d/$n" ] && { echo "$d/$n"; return 0; }
+  done
+  return 0
+}
+
+# ¿~/.codex/config.toml tiene un notify de primer nivel (antes de la primera [tabla])?
+codex_notify_line() {
+  local f="$HOME/.codex/config.toml"
+  [ -f "$f" ] || return 0
+  awk '/^[[:space:]]*\[/ {exit} /^[[:space:]]*notify[[:space:]]*=/ {print; exit}' "$f"
+}
+
+doctor_agents() {
+  echo; info "Agentes detectados"
+  local spec bin name level path nl
+  for spec in \
+    "claude|Claude Code|Completo: estado, te necesita, Permitir/Denegar" \
+    "codex|Codex|Sesiones: trabajando/parado y última acción" \
+    "gemini|Gemini CLI|Básico: sesión abierta y carpeta" \
+    "opencode|OpenCode|Básico: sesión abierta y carpeta" \
+    "aider|Aider|Básico: sesión abierta y carpeta" \
+    "cursor-agent|Cursor Agent|Básico: sesión abierta y carpeta"; do
+    IFS='|' read -r bin name level <<<"$spec"
+    path="$(find_cli "$bin")"
+    if [ -n "$path" ]; then ok "$name: $path · $level"
+    elif [ "$bin" = claude ]; then bad "CLI claude no encontrada (necesaria para borradores de Jira y agentes)"
+    else echo "  · $name: no instalado"; fi
+    if [ "$bin" = codex ] && [ -n "$path" ]; then
+      nl="$(codex_notify_line)"
+      if grep -q 'kaito-codex-notify' <<<"$nl"; then ok "aviso de Codex al terminar configurado (notify)"
+      else
+        warn "Codex: aviso al terminar sin configurar; añade a ~/.codex/config.toml (antes de la primera [sección]):"
+        echo "      notify = [\"python3\", \"$KAITO_HOME/hooks/kaito-codex-notify.py\"]"
+      fi
+    fi
+  done
+}
+
 cmd_doctor() {
   info "Diagnóstico de Kaito $(version)"
   local n=0
@@ -180,9 +241,6 @@ cmd_doctor() {
     *)  bad "no se pudo comprobar ~/.claude/settings.json" ;;
   esac
   if command -v python3 >/dev/null 2>&1; then ok "python3 $(python3 -c 'import platform;print(platform.python_version())')"; else bad "python3 no encontrado"; fi
-  if command -v claude >/dev/null 2>&1; then ok "claude: $(command -v claude)"
-  elif [ -x "$HOME/.local/bin/claude" ]; then ok "claude: $HOME/.local/bin/claude"
-  else bad "CLI claude no encontrada (necesaria para borradores de Jira y agentes)"; fi
   if command -v secret-tool >/dev/null 2>&1; then
     if secret-tool lookup service jira >/dev/null 2>&1; then ok "token de Jira presente en el llavero"
     else bad "sin token de Jira en el llavero (Ajustes de Kaito)"; fi
@@ -192,6 +250,7 @@ cmd_doctor() {
   if [ -n "$auto" ]; then ok "terminal 'auto': ${auto%%|*} · volver al agente: ${auto#*|}"
   else bad "ningún terminal compatible para 'auto' (ptyxis/gnome-terminal/kgx/warp)"; fi
   [ "$conf" = auto ] || warn "terminal configurado en Ajustes: $conf (no 'auto')"
+  doctor_agents
   if [ "$TEST" != 1 ] && command -v journalctl >/dev/null 2>&1; then
     echo; info "Últimas líneas de kaito en el journal"
     journalctl --user -b --no-pager 2>/dev/null | grep -i kaito | tail -n 10 | sed 's/^/     /' || true
