@@ -3,7 +3,7 @@ import {
     extractJson, parseCliOutput, normalizeDraft, textToAdf, matchIssueType, matchPriority,
     jiraErrorText, projectCandidates, extraRequiredFields, buildIssuePayload, buildDraftPrompt,
     mostUsedOption, claudeArgv, normalizeTransitions, pickTransition, buildCommentPrompt, parseCommentOutput,
-    commentArgv, COMMENT_SCHEMA, jiraSend, assignIssue,
+    commentArgv, COMMENT_SCHEMA, pickReadyTransition, readyRegex, jiraSend, assignIssue,
 } from './jiradraft.js';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
@@ -215,5 +215,21 @@ try {
 }
 eq([noAcc, seen.length], ['sin accountId', 2], 'asignar: sin accountId no llama');
 srv2.disconnect();
+
+// --- transición a "Por Hacer" ---
+const rt = (id, to) => ({id, name: 'x', to, category: 'new'});
+const ready = [rt('1', 'Por Hacer Marketing'), rt('2', 'Por Hacer Desarrollo'), rt('3', 'Haciendo Desarrollo')];
+eq(pickReadyTransition(ready, 'Desarrollo').id, '2', 'ready: prefiere departamento');
+eq(pickReadyTransition(ready, 'marketing').id, '1', 'ready: departamento en minúsculas');
+eq(pickReadyTransition(ready, '').id, '1', 'ready: sin departamento, la primera');
+eq(pickReadyTransition(ready, 'Ventas').id, '1', 'ready: departamento sin coincidencia -> primera');
+eq(pickReadyTransition([rt('4', 'Por Hacer Diseño')], 'DISEÑO').id, '4', 'ready: ñ');
+eq(pickReadyTransition([rt('5', 'Por Hacer Dirección')], 'direccion').id, '5', 'ready: tildes');
+eq(pickReadyTransition([rt('6', 'To Do')], 'Desarrollo').id, '6', 'ready: To Do en inglés');
+eq(pickReadyTransition([rt('7', 'por hacer')], '').id, '7', 'ready: minúsculas');
+eq(pickReadyTransition([rt('8', 'Haciendo'), rt('9', 'Por Asignar'), rt('10', 'Por hacerlo')], 'x'), null, 'ready: ninguna');
+eq(pickReadyTransition(null, 'x'), null, 'ready: sin transiciones');
+eq(pickReadyTransition([rt('11', 'Backlog')], '', readyRegex('^backlog')).id, '11', 'ready: regex configurable');
+eq(readyRegex('(').test('Por Hacer X'), true, 'readyRegex inválida -> por defecto');
 
 print(`OK ${n} aserciones`);

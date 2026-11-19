@@ -15,6 +15,7 @@ import {
 import {
     KINDS, PRIORITIES, PRIORITY_ES, DEFAULT_PROJECT, DRAFT_TIMEOUT_S,
     draftWithClaude, loadCreateContext, fetchProjectStats, createIssue,
+    moveToReady, readyRegex,
     matchIssueType, projectCandidates, mostUsedOption, fieldValue,
 } from './jiradraft.js';
 
@@ -682,7 +683,18 @@ export class CaptureModal {
             try {
                 St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, url);
             } catch (_e) { /* sin portapapeles */ }
-            Main.notify('Kaito', `${key} creado: ${summary}`);
+            // Los tickets nacen en "Por Asignar": pasarlos a "Por Hacer <Departamento>". Si falla, el ticket ya existe.
+            const dept = (j.ctx.extras[issueType.id] ?? []).map(f =>
+                /departament/i.test(f.name) ? f.options.find(o => o.id === sel[f.fieldId])?.value : null).find(Boolean) ?? '';
+            let msg = `${key} creado: ${summary}`;
+            try {
+                const r = await moveToReady(this._soup(), key, dept, readyRegex(readJson(CONFIG_PATH, {})?.jiraCreateStatus));
+                msg = r.ready ? `${key} creado en ${r.status}: ${summary}` : `${key} creado (sigue en ${r.status})`;
+            } catch (e) {
+                console.warn(`kaito: mover ${key} a Por Hacer: ${e.message}`);
+                msg = `${key} creado · no se pudo mover a Por Hacer: ${e.message}`;
+            }
+            Main.notify('Kaito', msg);
             if (gen === this._gen)
                 this.close();
         } catch (e) {

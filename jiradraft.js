@@ -557,6 +557,44 @@ export function pickTransition(transitions, kind) {
     return null;
 }
 
+export const READY_RE = /^(por hacer\b|to ?do$)/i;
+
+/** Puro. RegExp de estado "listo" desde un texto de config (regex, sin distinguir mayúsculas); por defecto READY_RE. */
+export function readyRegex(text) {
+    if (typeof text !== 'string' || !text.trim())
+        return READY_RE;
+    try {
+        return new RegExp(text.trim(), 'i');
+    } catch (_e) {
+        return READY_RE;
+    }
+}
+
+/**
+ * Puro. Transición cuyo estado DESTINO case con `re` (por defecto "Por Hacer ..." / "To Do"). Prefiere la
+ * que contenga `department` (sin mayúsculas ni tildes); si no, la primera. null si ninguna.
+ */
+export function pickReadyTransition(transitions, department = '', re = READY_RE) {
+    const hits = (transitions ?? []).filter(t => re.test(String(t.to ?? '').trim()));
+    const dep = plain(department);
+    return (dep && hits.find(t => plain(t.to).includes(dep))) || hits[0] || null;
+}
+
+/**
+ * Tras crear: si el ticket no está ya en un estado "listo", aplica la transición a "Por Hacer <Departamento>".
+ * Devuelve {status: nombre del estado resultante, moved: bool}. Lanza si falla la transición.
+ */
+export async function moveToReady(session, key, department = '', re = READY_RE) {
+    const cur = await fetchIssueBasics(session, key);
+    if (re.test(cur.status.trim()))
+        return {status: cur.status, moved: false, ready: true};
+    const t = pickReadyTransition(await fetchTransitions(session, key), department, re);
+    if (!t)
+        return {status: cur.status, moved: false, ready: false};
+    await applyTransition(session, key, t.id);
+    return {status: t.to, moved: true, ready: true};
+}
+
 export async function fetchTransitions(session, key) {
     checkKey(key);
     const auth = await jiraAuth();
