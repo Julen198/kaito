@@ -103,6 +103,9 @@ public enum Updates {
         public var tag: String
         public var hasMacAsset: Bool
         public var url: String
+        public init(tag: String, hasMacAsset: Bool, url: String) {
+            self.tag = tag; self.hasMacAsset = hasMacAsset; self.url = url
+        }
     }
 
     /// JSON de /releases/latest → versión y si trae Kaito-macOS.zip.
