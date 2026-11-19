@@ -54,14 +54,14 @@ Sube el número en `VERSION` (semver, p. ej. `0.2.0`), haz commit en `main` y et
 | Fedora 42 | 48 | Soportado (48 probado en Debian 13) |
 | Fedora 41 | 47 | Soportado (47 inferido: sin imagen de prueba, APIs iguales a 46 y 48) |
 | Fedora 40 | 46 | Soportado (46 probado en Ubuntu 24.04) |
-| Ubuntu 26.04 LTS | 50 | Soportado |
+| Ubuntu 26.04 LTS | 50 | Probado (contenedor, con ubuntu-dock, appindicator, tema Yaru y Ptyxis 50.1) |
 | Ubuntu 25.10 | 49 | Probado (contenedor) |
 | Ubuntu 25.04 | 48 | Soportado (48 probado en Debian 13; Ubuntu 25.04 ya sin soporte) |
 | Ubuntu 24.04 LTS | 46 | Probado (contenedor) |
 | Debian 13 (trixie) | 48 | Probado (contenedor) |
 | Debian 12 (bookworm) | 43 | **No soportado** (GNOME 43 no tiene extensiones ESM) |
 
-"Probado (contenedor)": `tests/compat/run.sh <46|48|49|all>` arranca gnome-shell headless en podman,
+"Probado (contenedor)": `tests/compat/run.sh <46|48|49|50u|all>` arranca gnome-shell headless en podman,
 comprueba que Kaito queda ACTIVE sin errores, ejecuta una autoprueba de la interfaz (menú, captura,
 tarjetas, notificación, modales, recarga en caliente), los tests de GJS y carga las preferencias.
 

@@ -1,4 +1,8 @@
 .kaito-menu { width: 420px; }
+/* Temas de menú claros (Yaru): Kaito pinta texto claro, así que el menú se queda oscuro. */
+.kaito-menu.kaito-force-dark { background-color: #36363a; color: #ffffff; border-color: rgba(255,255,255,0.1); }
+.kaito-menu.kaito-force-dark .popup-menu-item { color: #ffffff; }
+.kaito-menu.kaito-force-dark .popup-menu-item:hover, .kaito-menu.kaito-force-dark .popup-menu-item:focus { background-color: rgba(255,255,255,0.1) !important; color: #ffffff; }
 .kaito-panel { spacing: 10px; }
 .kaito-seg { spacing: 4px; }
 .kaito-icon { icon-size: 15px; }

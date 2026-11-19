@@ -283,6 +283,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
 
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
+                this._syncMenuTone();
                 this._applyMenuCap();
                 this._refresh();
             } else if (this._jiraPick) {
@@ -320,6 +321,21 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     }
 
     /** Limita la lista de Jira y todo el menú al área útil del monitor. */
+    // Los colores de Kaito son claros (menú oscuro de GNOME). Con un tema de menús claro (Yaru en Ubuntu 26.04)
+    // se vería blanco sobre blanco: ahí se fuerza el fondo oscuro de nuestro menú.
+    _syncMenuTone() {
+        try {
+            const box = this.menu.box;
+            box.remove_style_class_name('kaito-force-dark');
+            box.ensure_style();
+            const c = box.get_theme_node().get_background_color();
+            if (c.alpha > 128 && (0.299 * c.red + 0.587 * c.green + 0.114 * c.blue) / 255 > 0.6)
+                box.add_style_class_name('kaito-force-dark');
+        } catch (e) {
+            console.warn(`kaito: tono del menú: ${e.message}`);
+        }
+    }
+
     _applyMenuCap() {
         const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
         const area = Main.layoutManager.getWorkAreaForMonitor(Main.layoutManager.primaryIndex);

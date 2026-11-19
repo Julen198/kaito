@@ -4,6 +4,8 @@ ARG BASE=docker.io/library/ubuntu:24.04
 FROM ${BASE}
 # Réplica de Ubuntu opcional (p. ej. http://mirrors.edge.kernel.org/ubuntu/) si archive.ubuntu.com no responde.
 ARG UBUNTU_MIRROR=
+# 1 = sesión de Ubuntu 26.04: dock, appindicator, Yaru y Ptyxis (terminal por defecto).
+ARG UBUNTU_EXTRAS=0
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN if [ -n "$UBUNTU_MIRROR" ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
         sed -i -E "s#https?://(archive|security)\.ubuntu\.com/ubuntu/?#$UBUNTU_MIRROR#" /etc/apt/sources.list.d/ubuntu.sources; fi \
@@ -11,4 +13,6 @@ RUN if [ -n "$UBUNTU_MIRROR" ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ];
         gnome-shell gnome-shell-extension-prefs gjs dbus dbus-daemon libglib2.0-bin \
         gir1.2-soup-3.0 gir1.2-secret-1 gir1.2-adw-1 gir1.2-gtk-4.0 \
         gsettings-desktop-schemas librsvg2-common libgl1-mesa-dri python3 git ca-certificates \
+    && if [ "$UBUNTU_EXTRAS" = 1 ]; then apt-get install -y --no-install-recommends \
+        gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator yaru-theme-gnome-shell yaru-theme-icon ptyxis; fi \
     && rm -rf /var/lib/apt/lists/*

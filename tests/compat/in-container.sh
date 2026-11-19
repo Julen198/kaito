@@ -56,7 +56,7 @@ echo "$out" | grep -q '^APICHECK ok' && res apicheck PASS "mutter-$MUT" || { res
 # 3. gnome-shell headless con Kaito + la autoprueba; prefs.js contra ese mismo compositor.
 fresh $W/shell
 LOG=$W/shell.log
-mkdir -p $XDG_DATA_HOME/gnome-shell/extensions $XDG_CONFIG_HOME/kaito
+mkdir -p $XDG_DATA_HOME/gnome-shell/extensions $XDG_CONFIG_HOME/kaito $HOME/Desktop
 cp -a $EXT $XDG_DATA_HOME/gnome-shell/extensions/kaito@runnea
 cp -a "$SRC"/tests/compat/selftest@kaito $XDG_DATA_HOME/gnome-shell/extensions/
 echo '[{"id":"t1","name":"Revisar ventas","key":"RUN-1","cwd":"/tmp","enabled":true,"lastOk":true,"prompt":"x","nextRun":"2099-01-01T09:00:00.000Z"}]' > $XDG_CONFIG_HOME/kaito/tasks.json
@@ -68,16 +68,33 @@ if [ -n "$IN_CONTAINER" ]; then
 fi
 # Sin X11: no hay Xwayland en la imagen (y /tmp/.X11-unix no existe).
 NOX11=; gnome-shell --help 2>&1 | grep -q -- '--no-x11' && NOX11=--no-x11
-export SHELL_LOG=$LOG NOX11 EXT_DIR=$XDG_DATA_HOME/gnome-shell/extensions/kaito@runnea
+# Extras de la sesión de Ubuntu (imagen 50u): dock, appindicator, Yaru y modo `ubuntu` si existen.
+EXTRA_EXT=; for u in ubuntu-dock@ubuntu.com ubuntu-appindicators@ubuntu.com; do
+    [ -d /usr/share/gnome-shell/extensions/$u ] && EXTRA_EXT="$EXTRA_EXT, \"$u\""
+done
+MODE=; [ -f /usr/share/gnome-shell/modes/ubuntu.json ] && [ -f /usr/share/gnome-shell/theme/Yaru/gnome-shell-theme.gresource ] && MODE=--mode=ubuntu
+[ -n "$EXTRA_EXT" ] && echo "info ubuntu extras:$EXTRA_EXT ${MODE:+(shell $MODE)}"
+if command -v ptyxis >/dev/null; then
+    cat > $W/term.js <<JS
+import {resolveTerminal, terminalFocusLevel, ptyxisVersion} from 'file://$EXT/common.js';
+const t = resolveTerminal('auto');
+print(t ? t.id + ' -> nivel de foco ' + terminalFocusLevel(t.id, t.id === 'ptyxis' ? ptyxisVersion(t.flatpak) : null) : 'ninguno');
+JS
+    echo "info terminal: $(ptyxis --version 2>&1 | head -1) ; resolveTerminal(auto) = $(gjs -m $W/term.js 2>&1 | tail -1)"
+fi
+export SHELL_LOG=$LOG NOX11 MODE EXTRA_EXT EXT_DIR=$XDG_DATA_HOME/gnome-shell/extensions/kaito@runnea
 dbus-run-session -- bash -c '
     unset DISPLAY WAYLAND_DISPLAY
     gsettings set org.gnome.shell disable-user-extensions false
-    gsettings set org.gnome.shell enabled-extensions "[\"kaito@runnea\", \"selftest@kaito\"]"
-    gnome-shell --wayland $NOX11 --headless --virtual-monitor 1280x800 > $SHELL_LOG 2>&1 &
+    gsettings set org.gnome.shell enabled-extensions "[\"kaito@runnea\", \"selftest@kaito\"$EXTRA_EXT]"
+    gnome-shell --wayland $NOX11 $MODE --headless --virtual-monitor 1280x800 > $SHELL_LOG 2>&1 &
     SP=$!
     for i in $(seq 120); do grep -q "SELFTEST done" $SHELL_LOG && break; kill -0 $SP 2>/dev/null || break; sleep 0.5; done
     gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell \
         -m org.gnome.Shell.Extensions.GetExtensionInfo kaito@runnea > $SHELL_LOG.info 2>&1
+    for u in ubuntu-dock@ubuntu.com ubuntu-appindicators@ubuntu.com; do
+        echo "$u $(gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell -m org.gnome.Shell.Extensions.GetExtensionInfo $u 2>&1 | grep -oE ".(state|error).: <[^>]*>" | tr "\n" " ")" >> $SHELL_LOG.exts
+    done
     # prefs del sistema importan Shew (typelib privado de gnome-shell).
     GI_TYPELIB_PATH=$(ls -d /usr/lib*/gnome-shell/girepository-1.0 /usr/lib/*/gnome-shell 2>/dev/null | paste -sd:) \
     LD_LIBRARY_PATH=$(ls -d /usr/lib*/gnome-shell /usr/lib/*/gnome-shell 2>/dev/null | paste -sd:) \
@@ -92,11 +109,15 @@ grep -q 'kaito: cargado build' $LOG && res shell:load PASS "$(grep -c 'kaito: ca
 grep 'SELFTEST' $LOG | sed 's/^.*SELFTEST/SELFTEST/'
 grep -q 'SELFTEST done' $LOG && ! grep -q 'SELFTEST FAIL' $LOG && res selftest PASS || res selftest FAIL
 # Errores cuyo mensaje o pila (líneas "func@file:///…:N:M" que le siguen) mencionan a kaito o a la autoprueba.
-errs=$(awk '/JS ERROR|Unhandled promise|CRITICAL|JS WARNING|Gjs-WARNING/ { if (b ~ /kaito|selftest/) print b; b = $0; next }
+errs=$(awk '# (El aviso de la papelera de ubuntu-dock es del contenedor, sin gvfs; su pila arrastra la autoprueba.)
+    function k(x) { if (x ~ /^[^\n]*Impossible to monitor trash/) return 0; gsub(/kaito-compat/, "", x); return x ~ /kaito|selftest/ }
+    /JS ERROR|Unhandled promise|CRITICAL|JS WARNING|Gjs-WARNING/ { if (k(b)) print b; b = $0; next }
     b != "" && /@.*:[0-9]+(:[0-9]+)?$|^Stack trace|^$/ { b = b "\n" $0; next }
-    { if (b ~ /kaito|selftest/) print b; b = "" }
-    END { if (b ~ /kaito|selftest/) print b }' $LOG)
+    { if (k(b)) print b; b = "" }
+    END { if (k(b)) print b }' $LOG)
 [ -z "$errs" ] && res shell:errors PASS "0 errores de kaito" || { res shell:errors FAIL; echo "$errs" | head -30; }
+[ -n "$EXTRA_EXT" ] && sed "s/^/info ext: /" $LOG.exts
+[ -n "${KAITO_SHOT:-}" ] && { [ -s "$KAITO_SHOT" ] && echo "info captura: $KAITO_SHOT" || echo "info captura: no generada"; }
 grep -iE 'kaito' $LOG | grep -vE 'SELFTEST|cargado build' | head -20
 # El aviso del llavero (no hay org.freedesktop.secrets en el contenedor) es esperado.
 if grep -q '^PREFS ok' $LOG.prefs && grep -q 'rc=0' $LOG.prefs && ! grep -qE 'JS ERROR|threw an exception|TypeError|ReferenceError' $LOG.prefs; then

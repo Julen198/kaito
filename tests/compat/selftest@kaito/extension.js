@@ -3,6 +3,8 @@
 // modales de respuesta/comentario/resultado, la tarjeta fija, una recarga en caliente y un
 // desactivar/activar. Cada paso escribe "SELFTEST ok <paso>" o "SELFTEST FAIL <paso>: <error>".
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -59,6 +61,22 @@ const ISSUES = [
 const TASK = {id: 't1', name: 'Revisar ventas', key: 'RUN-1', cwd: '/tmp', enabled: true, lastOk: true, prompt: 'x'};
 const RUN = {ok: true, summary: 'Todo bien', text: 'Ventas **estables**.\n\n```sql\nSELECT 1\n```', ts: new Date().toISOString()};
 
+// KAITO_SHOT=/ruta.png: captura el escritorio (con el menú abierto) para revisarlo a ojo.
+async function screenshot() {
+    const path = GLib.getenv('KAITO_SHOT');
+    if (!path)
+        return;
+    try {
+        Gio._promisify(Shell.Screenshot.prototype, 'screenshot');
+        const stream = Gio.File.new_for_path(path).replace(null, false, Gio.FileCreateFlags.NONE, null);
+        await new Shell.Screenshot().screenshot(false, stream);
+        stream.close(null);
+        console.log(`SELFTEST ok screenshot: ${path}`);
+    } catch (e) {
+        console.log(`SELFTEST info screenshot falló: ${e}`);
+    }
+}
+
 async function step(name, fn) {
     try {
         const r = await fn();
@@ -100,6 +118,7 @@ async function run() {
         };
         ind.menu.open(false);
         await wait(800);
+        await screenshot();
         const t = labels(ind.menu.box);
         for (const want of ['RUN-1', 'Arreglar el login', 'Te necesita', 'web', 'Revisar ventas', 'Codex', 'Gemini', 'api', 'abierto'])
             if (!t.includes(want))
