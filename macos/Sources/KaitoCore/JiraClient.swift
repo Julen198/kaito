@@ -194,6 +194,13 @@ public final class JiraClient: @unchecked Sendable {
         throw KaitoError.message("Jira rechazó el ticket")
     }
 
+    /// Publica un comentario (texto con el formato de las descripciones → ADF).
+    public func postComment(_ key: String, text: String) async throws {
+        try Self.checkKey(key)
+        let (status, body) = try await send("POST", "/rest/api/3/issue/\(key)/comment", body: ["body": JiraDraft.textToAdf(text)])
+        guard (200..<300).contains(status) else { throw KaitoError.message(JiraDraft.jiraErrorText(body, status: status)) }
+    }
+
     /// Tras crear: si no está en un estado "listo", aplica la transición a "Por Hacer <Departamento>".
     public func moveToReady(_ key: String, department: String = "", re: Regex = JiraViews.readyRE) async throws -> (status: String, moved: Bool, ready: Bool) {
         let cur = try await basics(key)
@@ -228,12 +235,13 @@ public enum ClaudeCLI {
         return env
     }
 
-    /// Lanza `claude -p` con el prompt por stdin (cwd $HOME). Devuelve stdout.
+    /// Lanza `claude -p` con el prompt por stdin (cwd $HOME salvo `cwd`). Devuelve stdout.
     public static func run(argv: [String], prompt: String, timeout: TimeInterval = JiraDraft.draftTimeout,
-                           home: String = NSHomeDirectory()) async throws -> String {
+                           home: String = NSHomeDirectory(), cwd: String? = nil, extraEnv: [String: String] = [:]) async throws -> String {
         try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                let r = Shell.run(argv, stdin: prompt, cwd: home, env: environment(home: home), timeout: timeout)
+                let env = environment(home: home).merging(extraEnv) { $1 }
+                let r = Shell.run(argv, stdin: prompt, cwd: cwd ?? home, env: env, timeout: timeout)
                 if r.timedOut {
                     cont.resume(throwing: KaitoError.message("La IA no respondió en \(Int(timeout)) s"))
                 } else if r.status != 0 && trimmed(r.out).isEmpty {
@@ -244,6 +252,14 @@ public enum ClaudeCLI {
                 }
             }
         }
+    }
+
+    /// Borrador del comentario de Jira al terminar un agente (mismas garantías que el de tickets).
+    public static func draftComment(_ ctx: JiraDraft.CommentContext, claudeBin: String?) async throws -> String {
+        guard let bin = find(claudeBin: claudeBin) else {
+            throw KaitoError.message("No encuentro «claude»: define claudeBin en ~/.config/kaito/config.json")
+        }
+        return try JiraDraft.parseCommentOutput(try await run(argv: JiraDraft.commentArgv(bin), prompt: JiraDraft.buildCommentPrompt(ctx)))
     }
 
     public static func draft(_ text: String, claudeBin: String?) async throws -> Draft {

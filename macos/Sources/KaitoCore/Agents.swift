@@ -106,7 +106,7 @@ public enum AgentParsing {
         return info
     }
 
-    static let ticketRE = Regex("^\\s*Trabaja en el ticket de Jira ([A-Z][A-Z0-9_]*-\\d+)")
+    static let ticketRE = Regex("^\\s*Trabaja en (?:el ticket de Jira|la tarea) ([A-Z][A-Z0-9_]*-\\d+)") // ticket de Jira o tarea K-<n> del tablero
 
     static func userText(_ e: JSON) -> String? {
         guard e["type"]?.string == "user", e["isMeta"]?.bool != true else { return nil }

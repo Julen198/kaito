@@ -40,12 +40,13 @@ struct MenuBarLabel: View {
 
     var body: some View {
         let needs = model.needsCount
+        let moon = model.quiet.quiet ? Text("  \(Image(systemName: "moon.fill"))") : Text("")
         let agentIcon = needs > 0 ? "exclamationmark.bubble.fill" : model.workingCount > 0 ? "sparkles" : "sparkle"
         let agentNum = needs > 0 ? needs : model.workingCount
         if model.config.jiraEnabled {
-            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "ticket")) \(model.jiraCount)  \(Image(systemName: "checklist")) \(model.todoCount)")
+            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "ticket")) \(model.jiraCount)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
         } else {
-            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "checklist")) \(model.todoCount)")
+            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
         }
     }
 }

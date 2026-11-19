@@ -5,13 +5,16 @@ public struct KaitoPaths: Sendable {
     public var home: String
     public var configHome: String
     public var cacheHome: String
+    public var dataHome: String
 
     public init(home: String = NSHomeDirectory(), env: [String: String] = ProcessInfo.processInfo.environment) {
         self.home = home
         let cfg = env["XDG_CONFIG_HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil }
         let cache = env["XDG_CACHE_HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil }
+        let data = env["XDG_DATA_HOME"].flatMap { $0.hasPrefix("/") ? $0 : nil }
         configHome = cfg ?? "\(home)/.config"
         cacheHome = cache ?? "\(home)/.cache"
+        dataHome = data ?? "\(home)/.local/share"
     }
 
     public static let `default` = KaitoPaths()
@@ -28,6 +31,15 @@ public struct KaitoPaths: Sendable {
     public var dismissedPath: String { "\(cacheDir)/dismissed.json" }
     public var jiraProjectsCache: String { "\(cacheDir)/jira-projects.json" }
     public var macUpdatePath: String { "\(cacheDir)/mac-update.json" }
+    public var finishedPath: String { "\(cacheDir)/finished.json" }
+    public var claudeUsagePath: String { "\(cacheDir)/claude-usage.json" } // lo escribe hooks/kaito-statusline.py
+    public var dailyPath: String { "\(cacheDir)/daily.json" }
+    public var quietQueuePath: String { "\(cacheDir)/quiet-queue.json" }
+    public var tasksPath: String { "\(confDir)/tasks.json" }
+    public var taskRunsDir: String { "\(dataHome)/kaito/task-runs" }
+    public var claudeJson: String { "\(home)/.claude.json" }
+    /// Código instalado por install-mac.sh (hooks/ con merge-settings.py y kaito-statusline.py).
+    public var installedSrc: String { "\(home)/.local/share/kaito-src" } // ruta fija en install-mac.sh
     public var claudeProjects: String { "\(home)/.claude/projects" }
     public var claudeSessions: String { "\(home)/.claude/sessions" }
     public var claudeSettings: String { "\(home)/.claude/settings.json" }

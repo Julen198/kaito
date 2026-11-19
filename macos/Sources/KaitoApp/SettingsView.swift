@@ -29,12 +29,26 @@ struct SettingsView: View {
     @State private var launchAtLogin = false
     @State private var status: String?
     @State private var testing = false
+    @State private var notifyDone = true
+    @State private var autoReview = true
+    @State private var reviewReminderMinutes = 30
+    @State private var dailySummary = true
+    @State private var showUsage = true
+    @State private var tasksEnabled = true
+    @State private var whEnabled = false
+    @State private var whDays: Set<Int> = [1, 2, 3, 4, 5]
+    @State private var whStart = "09:00"
+    @State private var whEnd = "18:00"
+    @State private var dndSilenceReminders = false
+
+    static let dayLetters = ["L", "M", "X", "J", "V", "S", "D"] // lunes = 1 … domingo = 7
 
     var body: some View {
         TabView {
             general.tabItem { Label("General", systemImage: "gearshape") }
             jira.tabItem { Label("Jira", systemImage: "ticket") }
             agents.tabItem { Label("Agentes", systemImage: "sparkles") }
+            notices.tabItem { Label("Avisos", systemImage: "bell") }
         }
         .padding(16)
         .frame(width: 520)
@@ -123,6 +137,66 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    private var notices: some View {
+        Form {
+            Section("Avisos") {
+                Toggle("Avisar cuando un agente termina (tras 3 min o más trabajando)", isOn: $notifyDone)
+                Toggle("Ticket terminado con commits: moverlo a revisión y tarjeta «listo»", isOn: $autoReview)
+                Stepper(reviewReminderMinutes == 0 ? "Sin recordatorio de revisión" : "Recordar revisarlo a los \(reviewReminderMinutes) min",
+                        value: $reviewReminderMinutes, in: 0...240, step: 5)
+                Toggle("Resumen del día (a partir de las 06:00)", isOn: $dailySummary)
+                Toggle("Tareas programadas", isOn: $tasksEnabled)
+            }
+            Section("Uso") {
+                Toggle("Mostrar el uso de Claude y Codex (5 h y semana)", isOn: $showUsage)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Datos de uso de Claude")
+                        Text(statusLineText).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if model.statusLineBusy { ProgressView().controlSize(.small) }
+                    if model.statusLineState == "kaito" {
+                        Button("Quitar") { model.setStatusLine(install: false) }.disabled(model.statusLineBusy)
+                    } else {
+                        Button("Instalar") { model.setStatusLine(install: true) }
+                            .disabled(model.statusLineBusy || model.statusLineState == "other")
+                    }
+                }
+            }
+            Section("No molestar") {
+                Toggle("Horario de trabajo (fuera de él, No molestar)", isOn: $whEnabled)
+                HStack(spacing: 4) {
+                    ForEach(1...7, id: \.self) { d in
+                        Toggle(Self.dayLetters[d - 1], isOn: Binding(get: { whDays.contains(d) }, set: { on in
+                            if on { whDays.insert(d) } else { whDays.remove(d) }
+                        }))
+                        .toggleStyle(.button)
+                    }
+                }
+                .disabled(!whEnabled)
+                HStack {
+                    TextField("Empieza", text: $whStart, prompt: Text("09:00")).frame(width: 140)
+                    TextField("Acaba", text: $whEnd, prompt: Text("18:00")).frame(width: 140)
+                }
+                .disabled(!whEnabled)
+                Toggle("Retener también los recordatorios", isOn: $dndSilenceReminders)
+                Text("Mientras dure, los avisos (terminado, «listo», tareas) se guardan y salen juntos en «Mientras no estabas».")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { model.refreshStatusLineState() }
+    }
+
+    private var statusLineText: String {
+        switch model.statusLineState {
+        case "kaito": return "Instalada: la statusLine de Kaito guarda los límites de 5 h y semana"
+        case "other": return "Ya tienes otra statusLine en ~/.claude/settings.json: no se toca"
+        default: return "Añade la statusLine de Kaito a ~/.claude/settings.json"
+        }
+    }
+
     private func load() {
         let c = model.configStore.read()
         jiraEnabled = c.jiraEnabled
@@ -145,6 +219,24 @@ struct SettingsView: View {
         repoRoots = c.repoRoots.joined(separator: ", ")
         checkUpdates = c.checkUpdates
         launchAtLogin = LoginItem.enabled
+        notifyDone = c.notifyDone
+        autoReview = c.autoReview
+        reviewReminderMinutes = c.reviewReminderMinutes
+        dailySummary = c.dailySummary
+        showUsage = c.showUsage
+        tasksEnabled = c.tasksEnabled
+        whEnabled = c.workHours.enabled
+        whDays = Set(c.workHours.days)
+        whStart = c.workHours.start
+        whEnd = c.workHours.end
+        dndSilenceReminders = c.dndSilenceReminders
+    }
+
+    private var workHoursJSON: JSON {
+        let days: [JSON] = whDays.sorted().map { JSON.number(Double($0)) }
+        let raw: JSON = .object(["enabled": .bool(whEnabled), "days": .array(days),
+                                 "start": .string(trimmed(whStart)), "end": .string(trimmed(whEnd))])
+        return WorkHours.normalize(raw).json
     }
 
     private func save() {
@@ -162,6 +254,14 @@ struct SettingsView: View {
             "captureHotkey": .string(hotkey),
             "agentProviders": .object(providers.mapValues { .bool($0) }),
             "checkUpdates": .bool(checkUpdates),
+            "notifyDone": .bool(notifyDone),
+            "autoReview": .bool(autoReview),
+            "reviewReminderMinutes": .number(Double(reviewReminderMinutes)),
+            "dailySummary": .bool(dailySummary),
+            "showUsage": .bool(showUsage),
+            "tasksEnabled": .bool(tasksEnabled),
+            "dndSilenceReminders": .bool(dndSilenceReminders),
+            "workHours": workHoursJSON,
         ]
         if preset == "custom" {
             patch["jiraJql"] = .string(trimmed(customJql))
@@ -185,6 +285,9 @@ struct SettingsView: View {
         model.reloadConfig()
         model.refreshJira(force: true)
         model.refreshAgents()
+        model.refreshUsage()
+        model.quietTick()
+        model.checkReminders()
     }
 
     private func test() {

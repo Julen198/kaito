@@ -24,7 +24,20 @@ echo "==> Montando $APP"
 rm -rf "$APP" "$OUT/Kaito-macOS.zip"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Kaito"
-[ -f "$HERE/Resources/Kaito.icns" ] && cp "$HERE/Resources/Kaito.icns" "$APP/Contents/Resources/"
+# Icono: Resources/Kaito.icns (generado con Resources/make-icon.py); si falta, desde el PNG de 1024 con sips + iconutil.
+if [ -f "$HERE/Resources/Kaito.icns" ]; then
+  cp "$HERE/Resources/Kaito.icns" "$APP/Contents/Resources/"
+elif [ -f "$HERE/Resources/Kaito-1024.png" ] && command -v iconutil >/dev/null; then
+  ICONSET="$OUT/Kaito.iconset"
+  rm -rf "$ICONSET" && mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z "$s" "$s" "$HERE/Resources/Kaito-1024.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    d=$((s * 2))
+    sips -z "$d" "$d" "$HERE/Resources/Kaito-1024.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Kaito.icns"
+  rm -rf "$ICONSET"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

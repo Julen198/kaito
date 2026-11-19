@@ -42,6 +42,22 @@ final class AppModel: ObservableObject {
     @Published var flash: String?
     @Published var update: Updates.Release?
 
+    /// No molestar / fuera de horario, uso (anillos), tareas programadas y statusLine de Claude.
+    @Published var quiet = QuietState(quiet: false, reason: nil, until: nil)
+    @Published var usage: [ProviderUsage] = []
+    @Published var tasks: [ScheduledTask] = []
+    @Published var runningTaskId: String?
+    @Published var statusLineState = "none" // none | kaito | other
+    @Published var statusLineBusy = false
+
+    let taskStore: TaskStore
+    let codexUsage: Usage.CodexReader
+    let launchedAt = Date()
+    /// sessionId → desde cuándo trabaja; nil hasta la primera carga (no avisar de lo que ya estaba parado).
+    var busySince: [String: Date]?
+    var taskQueue: [(id: String, manual: Bool)] = []
+    var jiraOK = false
+
     private var timers: [Timer] = []
     private var agentsBusy = false
     private var jiraBusy = false
@@ -59,6 +75,8 @@ final class AppModel: ObservableObject {
         data = DataStore(paths: paths)
         claude = ClaudeAgents(paths: paths)
         others = OtherAgents(paths: paths)
+        taskStore = TaskStore(paths: paths)
+        codexUsage = Usage.CodexReader(root: paths.codexSessions)
     }
 
     // MARK: contadores
@@ -96,7 +114,16 @@ final class AppModel: ObservableObject {
             Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
                 Task { @MainActor in await AppModel.shared.checkForUpdate() }
             },
+            Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+                Task { @MainActor in AppModel.shared.periodic() }
+            },
+            // Primer repaso a los pocos segundos (avisos retenidos, resumen del día, tareas vencidas).
+            Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { _ in
+                Task { @MainActor in AppModel.shared.periodic() }
+            },
         ]
+        refreshUsage()
+        refreshStatusLineState()
     }
 
     func reloadConfig() {
@@ -116,10 +143,13 @@ final class AppModel: ObservableObject {
     /// Ficheros locales (config, pendientes, notas, recordatorios). Baratos: en el hilo principal.
     func refreshLocal() {
         reloadConfig()
-        let t = data.todos(), n = data.notes(), r = data.reminders()
+        let t = data.todos(), n = data.notes(), r = data.reminders(), k = taskStore.read()
         if t != todos { todos = t }
         if n != notes { notes = n }
         if r != reminders { reminders = r }
+        if k != tasks { tasks = k }
+        let q = Quiet.isQuiet(Date(), config: config)
+        if q != quiet { quiet = q }
     }
 
     func refreshAgents() {
@@ -140,6 +170,7 @@ final class AppModel: ObservableObject {
                 let m = AppModel.shared
                 if m.agents != visible { m.agents = visible }
                 m.agentsBusy = false
+                m.checkDone(visible)
             }
         }
     }
@@ -232,9 +263,11 @@ final class AppModel: ObservableObject {
                 issues = out
                 jiraBase = client.base
                 jiraMessage = nil
+                jiraOK = true
                 if myAccountId == nil { myAccountId = try? await client.myself()["accountId"]?.string }
             } catch {
                 jiraMessage = "Jira: \(error.localizedDescription)"
+                jiraOK = false
             }
         }
     }
@@ -411,8 +444,14 @@ final class AppModel: ObservableObject {
         checkReminders()
     }
 
+    /// Con No molestar: sin sonido ni notificación; si además dndSilenceReminders, se retienen hasta que acabe.
     func checkReminders() {
-        ReminderPanelController.shared.update(with: data.dueReminders())
+        let q = Quiet.isQuiet(Date(), config: config)
+        if q.quiet && config.dndSilenceReminders {
+            ReminderPanelController.shared.update(with: [], quiet: true)
+            return
+        }
+        ReminderPanelController.shared.update(with: data.dueReminders(), quiet: q.quiet)
     }
 
     func addNote(_ text: String) {

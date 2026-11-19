@@ -38,13 +38,14 @@ func activeScreen() -> NSScreen? {
 // MARK: - Captura rápida
 
 enum CaptureMode: String, CaseIterable, Identifiable {
-    case note, reminder, jira
+    case note, reminder, jira, task
     var id: String { rawValue }
     var title: String {
         switch self {
         case .note: return "Nota"
         case .reminder: return "Recordatorio"
         case .jira: return "Jira"
+        case .task: return "Tarea"
         }
     }
     var hint: String {
@@ -52,6 +53,7 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         case .note: return "Escribe una nota"
         case .reminder: return "Qué y cuándo: «llamar a Iker en 20 min»"
         case .jira: return "Qué pasa: «el chat de Nike en FR no carga los cupones, urgente»"
+        case .task: return "Cuándo y qué: «cada lunes a las 9 revisa en BigQuery las ventas»"
         }
     }
 }
@@ -77,6 +79,16 @@ final class CaptureModel: ObservableObject {
     @Published var typeId: String?
     @Published var extraSel: [String: String] = [:]
 
+    // Tarea programada: revisión antes de guardar.
+    @Published var taskReview = false
+    @Published var taskName = ""
+    @Published var taskPrompt = ""
+    @Published var taskCwd = ""
+    @Published var taskTools = "readonly"
+    @Published var taskKey = ""
+    @Published var taskRule: TaskRule?
+    @Published var taskLabel = ""
+
     var onClose: (() -> Void)?
     private var gen = 0
     private var tick: Timer?
@@ -96,6 +108,7 @@ final class CaptureModel: ObservableObject {
         typeId = nil
         extraSel = [:]
         projects = []
+        taskReview = false
         focusToken += 1
     }
 
@@ -108,6 +121,48 @@ final class CaptureModel: ObservableObject {
 
     var reminderPreview: String? {
         trimmed(text).isEmpty ? nil : When.parse(text)?.label
+    }
+
+    var taskPreview: String? {
+        trimmed(text).isEmpty ? nil : When.parseSchedule(text)?.label
+    }
+
+    /// Texto → regla (español), nombre, carpeta y herramientas sugeridas; pasa a la revisión.
+    func startTaskReview(_ t: String) {
+        guard let s = When.parseSchedule(t) else {
+            error = "Añade cuándo: «cada lunes a las 9», «todos los días a las 8», «mañana a las 10»"
+            return
+        }
+        let prompt = s.clean.isEmpty ? t : s.clean
+        let key = Tasks.extractKey(prompt)
+        taskRule = s.rule
+        taskLabel = s.label
+        taskPrompt = prompt
+        taskName = Tasks.taskName(prompt)
+        taskKey = key ?? ""
+        taskTools = Tasks.suggestTools(prompt, withTicket: key != nil)
+        taskCwd = Tasks.resolveCwd(key: key, config: app.config, home: app.paths.home, isDir: FileUtil.isDir)
+        error = nil
+        taskReview = true
+    }
+
+    func createTask() {
+        guard let rule = taskRule else { return }
+        let name = collapseSpaces(taskName), prompt = trimmed(taskPrompt), cwd = trimmed(taskCwd)
+        guard !prompt.isEmpty else {
+            error = "Falta qué tiene que hacer"
+            return
+        }
+        guard FileUtil.isDir(Tasks.expandHome(cwd.isEmpty ? "~" : cwd, home: app.paths.home)) else {
+            error = "La carpeta \(cwd) no existe"
+            return
+        }
+        let key = trimmed(taskKey).uppercased()
+        if let msg = app.addTask(name: name.isEmpty ? Tasks.taskName(prompt) : name, prompt: prompt, cwd: cwd.isEmpty ? "~" : cwd,
+                                 rule: rule, tools: taskTools, key: JiraViews.keyRE.test(key) ? key : nil) {
+            app.show(msg)
+            onClose?()
+        }
     }
 
     var currentType: IssueTypeRef? {
@@ -133,6 +188,8 @@ final class CaptureModel: ObservableObject {
             }
         case .jira:
             if stage == .input { startDraft(t) }
+        case .task:
+            if !taskReview { startTaskReview(t) }
         }
     }
 
@@ -302,10 +359,12 @@ struct CaptureView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .disabled(model.stage != .input)
+            .disabled(model.stage != .input || model.taskReview)
 
             if model.mode == .jira && (model.stage == .review || model.stage == .creating) {
                 review
+            } else if model.mode == .task && model.taskReview {
+                taskReview
             } else {
                 TextField(model.mode.hint, text: $model.text)
                     .textFieldStyle(.plain)
@@ -324,7 +383,16 @@ struct CaptureView: View {
         .onAppear { focused = true }
         .onChange(of: model.focusToken) { _, _ in focused = true }
         .onExitCommand {
-            if model.stage == .drafting { model.cancelDraft() } else if model.stage == .review { model.back() } else { model.onClose?() }
+            if model.stage == .drafting {
+                model.cancelDraft()
+            } else if model.stage == .review {
+                model.back()
+            } else if model.taskReview {
+                model.taskReview = false
+                model.focusToken += 1
+            } else {
+                model.onClose?()
+            }
         }
     }
 
@@ -338,6 +406,10 @@ struct CaptureView: View {
                 Image(systemName: "alarm").foregroundStyle(model.reminderPreview == nil ? Color.secondary : Color.teal)
                 Text(model.reminderPreview ?? "Añade cuándo: «en 20 min», «a las 17:30», «mañana»")
                     .foregroundStyle(model.reminderPreview == nil ? Color.secondary : Color.primary)
+            case .task:
+                Image(systemName: "clock").foregroundStyle(model.taskPreview == nil ? Color.secondary : Color.teal)
+                Text(model.taskPreview ?? "Añade cuándo: «cada lunes a las 9», «todos los días a las 8», «mañana a las 10»")
+                    .foregroundStyle(model.taskPreview == nil ? Color.secondary : Color.primary)
             case .jira:
                 if model.stage == .drafting {
                     ProgressView().controlSize(.small)
@@ -352,6 +424,45 @@ struct CaptureView: View {
             Text("Enter guardar · Esc cerrar").font(.caption).foregroundStyle(.tertiary)
         }
         .font(.callout)
+    }
+
+    private var taskReview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Nombre de la tarea", text: $model.taskName)
+                .textFieldStyle(.plain)
+                .font(.system(size: 18, weight: .semibold))
+            HStack(spacing: 6) {
+                Image(systemName: "clock").foregroundStyle(.teal)
+                Text(model.taskLabel).font(.callout)
+            }
+            TextEditor(text: $model.taskPrompt)
+                .font(.callout)
+                .frame(height: 120)
+                .scrollContentBackground(.hidden)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+            HStack {
+                TextField("Carpeta de trabajo", text: $model.taskCwd)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Ticket (opcional)", text: $model.taskKey)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 140)
+            }
+            Picker("Herramientas", selection: $model.taskTools) {
+                ForEach(Tasks.tools, id: \.self) { t in Text(Tasks.toolsLabel[t] ?? t).tag(t) }
+            }
+            .frame(width: 360)
+            Text("Claude en modo headless con herramientas de solo lectura (sin editar ni ejecutar comandos); con BigQuery solo SELECT.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Volver") {
+                    model.taskReview = false
+                    model.focusToken += 1
+                }
+                Spacer()
+                Button("Crear tarea") { model.createTask() }
+                    .keyboardShortcut(.return, modifiers: .command)
+            }
+        }
     }
 
     private var review: some View {
@@ -435,6 +546,14 @@ final class CapturePanelController {
     func close() {
         panel?.orderOut(nil)
     }
+
+    /// Captura en la pestaña Tarea con texto inicial (p. ej. "RUN-1: revisa que ").
+    func showTask(prefill: String) {
+        show()
+        model.mode = .task
+        model.text = prefill
+        model.focusToken += 1
+    }
 }
 
 // MARK: - Recordatorios en pantalla
@@ -475,7 +594,7 @@ final class ReminderPanelController {
     private var shownIds: [String] = []
     private var announced = Set<String>()
 
-    func update(with due: [Reminder]) {
+    func update(with due: [Reminder], quiet: Bool = false) {
         let ids = due.map(\.id)
         if due.isEmpty {
             panel?.orderOut(nil)
@@ -485,7 +604,7 @@ final class ReminderPanelController {
         // Sonido y notificación solo para los que aparecen por primera vez (o vuelven tras posponer).
         let fresh = due.filter { !announced.contains("\($0.id)#\($0.snoozes)") }
         for r in fresh { announced.insert("\(r.id)#\(r.snoozes)") }
-        if !fresh.isEmpty {
+        if !fresh.isEmpty && !quiet {
             NSSound(named: NSSound.Name("Glass"))?.play()
             for r in fresh { Notifier.post(title: "Recordatorio", body: r.text) }
         }

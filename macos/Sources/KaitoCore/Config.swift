@@ -55,6 +55,19 @@ public struct KaitoConfig: Sendable {
     public var jiraCreateProject: String? = nil
     public var jiraCreateStatus: String? = nil
     public var jiraCreateFields: [String: [String: String]] = [:]
+    // Avisos, tareas, uso y "No molestar" (mismas claves y valores por defecto que readConfig de common.js).
+    public var notifyDone = true
+    public var autoReview = true
+    public var reviewReminderMinutes = 30
+    public var dailySummary = true
+    public var showUsage = true
+    public var tasksEnabled = true
+    public var workHours = WorkHours.default
+    public var dndManual = false
+    public var dndUntil: Double? = nil // epoch ms
+    public var dndSkipUntil: Double? = nil // epoch ms
+    public var dndSilenceReminders = false
+    public var bqMcpServer: String? = nil
 
     public init() {}
 
@@ -102,6 +115,22 @@ public struct KaitoConfig: Sendable {
         for p in Providers.all { prov[p.id] = rp[p.id]?.bool != false }
         c.agentProviders = prov
         if let b = raw["claudeBin"]?.string, !trimmed(b).isEmpty { c.claudeBin = trimmed(b) }
+        c.notifyDone = raw["notifyDone"]?.bool != false
+        c.autoReview = raw["autoReview"]?.bool != false
+        if let rm = raw["reviewReminderMinutes"]?.number, rm.isFinite, rm >= 0 { c.reviewReminderMinutes = Int(rm.rounded()) }
+        c.dailySummary = raw["dailySummary"]?.bool != false
+        c.showUsage = raw["showUsage"]?.bool != false
+        c.tasksEnabled = raw["tasksEnabled"]?.bool != false
+        c.workHours = WorkHours.normalize(raw["workHours"])
+        c.dndManual = raw["dndManual"]?.bool == true
+        func epoch(_ k: String) -> Double? {
+            guard let v = raw[k]?.number, v.isFinite, v > 0 else { return nil }
+            return v
+        }
+        c.dndUntil = epoch("dndUntil")
+        c.dndSkipUntil = epoch("dndSkipUntil")
+        c.dndSilenceReminders = raw["dndSilenceReminders"]?.bool == true
+        if let b = raw["bqMcpServer"]?.string, !trimmed(b).isEmpty { c.bqMcpServer = trimmed(b) }
         c.jiraCreateProject = raw["jiraCreateProject"]?.string
         c.jiraCreateStatus = raw["jiraCreateStatus"]?.string
         if let f = raw["jiraCreateFields"]?.object {

@@ -10,11 +10,26 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if model.quiet.quiet {
+                HStack(spacing: 6) {
+                    Image(systemName: "moon.fill")
+                    Text(Quiet.quietLabel(model.quiet, now: Date()))
+                    Spacer()
+                    Button("Desactivar") { model.setQuiet("off") }
+                        .buttonStyle(.borderless)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+            }
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     AgentsSection()
+                    if model.config.showUsage && !model.usage.isEmpty { UsageSection() }
                     if model.config.jiraEnabled { JiraSection() }
+                    if model.config.tasksEnabled { TasksSection() }
                     TodosSection()
                     RemindersSection()
                     NotesSection()
@@ -49,9 +64,11 @@ struct MenuView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.tint)
             }
+            QuietMenu()
             Button {
                 model.refreshAgents()
                 model.refreshJira(force: true)
+                model.refreshUsage()
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -233,6 +250,13 @@ struct AgentRow: View {
         .onHover { hover = $0 }
         .onTapGesture { model.focus(agent) }
         .help("Ir a su terminal")
+        .contextMenu {
+            Button("Ir al agente") { model.focus(agent) }
+            if let t = agent.ticket, model.config.jiraEnabled, !Finish.isLocalKey(t) {
+                Button("Comentar en Jira") { model.commentOnTicket(agent) }
+                Button("Programar revisión") { CapturePanelController.shared.showTask(prefill: "\(t): revisa que ") }
+            }
+        }
     }
 }
 
