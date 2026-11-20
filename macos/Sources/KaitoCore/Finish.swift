@@ -32,6 +32,19 @@ public struct FinishLine: Equatable, Sendable, Hashable {
     public init(text: String, warn: Bool, quote: Bool = false) { self.text = text; self.warn = warn; self.quote = quote }
 }
 
+/// Rama de un ticket encontrada con `Finish.findTicketBranches`: local, remota (seguimiento, sin red) o ambas.
+public struct TicketBranch: Equatable, Sendable {
+    public var repo: String
+    public var branch: String
+    public var local: Bool
+    public var remote: Bool
+    public var ts: Double
+    public var upstream: String?
+    public init(repo: String = "", branch: String, local: Bool, remote: Bool, ts: Double, upstream: String? = nil) {
+        self.repo = repo; self.branch = branch; self.local = local; self.remote = remote; self.ts = ts; self.upstream = upstream
+    }
+}
+
 /// Ejecuta git con argv (sin shell) y tiempo máximo. Devuelve stdout recortado o nil si falla.
 public enum Git {
     public static let timeout: TimeInterval = 10
@@ -208,6 +221,83 @@ public enum Finish {
             found.append((branch, ts))
         }
         return found.enumerated().sorted { $0.element.ts != $1.element.ts ? $0.element.ts > $1.element.ts : $0.offset < $1.offset }.map(\.element)
+    }
+
+    static func keyRegex(_ key: String) -> Regex? {
+        key.isEmpty ? nil : Regex("(?<![a-z0-9])\(NSRegularExpression.escapedPattern(for: key))(?!\\d)", caseInsensitive: true)
+    }
+
+    /// `for-each-ref --format=%(refname)<TAB>%(committerdate:unix)<TAB>%(upstream:short) refs/heads refs/remotes` → ramas con
+    /// `key` en el nombre (RUN-5 no casa con RUN-50), local y remota del mismo nombre fusionadas, la más reciente primero.
+    /// Omite `<remoto>/HEAD`.
+    public static func parseBranchRefs(_ text: String?, key: String) -> [TicketBranch] {
+        guard let re = keyRegex(key) else { return [] }
+        var by: [String: TicketBranch] = [:]
+        var order: [String] = []
+        for l in (text ?? "").components(separatedBy: "\n") {
+            let f = l.components(separatedBy: "\t")
+            guard f.count >= 2, let ts = Double(trimmed(f[1])), ts.isFinite else { continue }
+            let ref = f[0]
+            let name: String, isLocal: Bool
+            if ref.hasPrefix("refs/heads/") {
+                name = String(ref.dropFirst(11)); isLocal = true
+            } else if ref.hasPrefix("refs/remotes/") {
+                let rest = String(ref.dropFirst(13))
+                guard let slash = rest.firstIndex(of: "/") else { continue }
+                name = String(rest[rest.index(after: slash)...]); isLocal = false
+                if name == "HEAD" { continue }
+            } else { continue }
+            guard !name.isEmpty, re.test(name) else { continue }
+            var e = by[name] ?? TicketBranch(branch: name, local: false, remote: false, ts: 0)
+            if by[name] == nil { order.append(name) }
+            if isLocal { e.local = true } else { e.remote = true }
+            e.ts = max(e.ts, ts)
+            if isLocal, f.count > 2, !trimmed(f[2]).isEmpty { e.upstream = trimmed(f[2]) }
+            by[name] = e
+        }
+        return order.compactMap { by[$0] }.enumerated()
+            .sorted { $0.element.ts != $1.element.ts ? $0.element.ts > $1.element.ts : $0.offset < $1.offset }.map(\.element)
+    }
+
+    /// `git worktree list --porcelain` → rama → ruta del worktree donde está activa.
+    public static func parseWorktrees(_ text: String?) -> [String: String] {
+        var out: [String: String] = [:]
+        var path: String? = nil
+        for l in (text ?? "").components(separatedBy: "\n") {
+            if l.hasPrefix("worktree ") { path = String(l.dropFirst(9)) }
+            else if l.hasPrefix("branch refs/heads/"), let path { out[String(l.dropFirst(18))] = path }
+        }
+        return out
+    }
+
+    /// Ramas (locales y de seguimiento remoto; sin red) de `key` en `repos` (máx. 40, `perRepo` s por llamada a git). Si la rama
+    /// está activa en otro worktree, el resultado apunta a ese worktree. Bloqueante: llamar fuera del hilo principal.
+    public static func findTicketBranches(key: String, repos: [String], perRepo: TimeInterval = 3) -> [TicketBranch] {
+        guard keyRegex(key) != nil else { return [] }
+        var seen = Set<String>()
+        let list = repos.filter { $0.hasPrefix("/") && seen.insert($0).inserted }.prefix(reposMax)
+        let lock = NSLock()
+        var found: [String: TicketBranch] = [:]
+        let items = Array(list)
+        DispatchQueue.concurrentPerform(iterations: items.count) { i in
+            let repo = items[i]
+            let refs = Git.run(repo, ["for-each-ref", "--format=%(refname)%09%(committerdate:unix)%09%(upstream:short)", "refs/heads", "refs/remotes"], timeout: perRepo)
+            let hits = parseBranchRefs(refs, key: key)
+            guard !hits.isEmpty else { return }
+            let wts = parseWorktrees(Git.run(repo, ["worktree", "list", "--porcelain"], timeout: perRepo))
+            lock.lock(); defer { lock.unlock() }
+            for var h in hits {
+                let at = wts[h.branch] ?? repo
+                h.repo = at
+                let k = "\(at)\u{0}\(h.branch)"
+                if let p = found[k] {
+                    h.local = h.local || p.local; h.remote = h.remote || p.remote; h.ts = max(h.ts, p.ts)
+                    h.upstream = h.upstream ?? p.upstream
+                }
+                found[k] = h
+            }
+        }
+        return found.values.sorted { $0.ts != $1.ts ? $0.ts > $1.ts : $0.repo + $0.branch < $1.repo + $1.branch }
     }
 
     /// Estado git de `cwd` (o de la rama local `branch`); nil si no es un repo. commits = los de fecha >= sinceS.

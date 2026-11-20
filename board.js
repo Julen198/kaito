@@ -162,20 +162,54 @@ export function taskSlug(title, max = 40) {
     return (s.slice(0, max).replace(/-+$/, '') || 'tarea');
 }
 
+/** Puro. "hace 5 min" / "hace 3 h" / "hace 2 d" a partir de un timestamp unix (s). */
+export function relAgo(ts, now = Date.now() / 1000) {
+    const d = Math.max(0, now - Number(ts));
+    if (!Number.isFinite(d))
+        return 'hace tiempo';
+    if (d < 60)
+        return 'hace menos de 1 min';
+    if (d < 3600)
+        return `hace ${Math.floor(d / 60)} min`;
+    if (d < 86400)
+        return `hace ${Math.floor(d / 3600)} h`;
+    return `hace ${Math.floor(d / 86400)} d`;
+}
+
+/**
+ * Puro. `existing` = {repo, branch, local, remote, ts} (findTicketBranches) y `repo` el elegido →
+ * {here, other}: `here` si la rama está en ese repo; `other` (línea "Ojo: ...") si está en otro.
+ */
+export function splitExisting(repo, existing) {
+    if (!existing?.branch)
+        return {here: null, other: ''};
+    if (existing.repo === repo)
+        return {here: existing, other: ''};
+    const name = String(existing.repo ?? '').split('/').filter(Boolean).pop() ?? existing.repo;
+    return {here: null, other: `Ojo: hay una rama de este ticket en ${name} (${existing.branch}).\n`};
+}
+
 /**
  * Puro. Párrafo de Git del prompt (el mismo para tickets de Jira y tareas locales).
  * `branch`: nombre sugerido de la rama (p. ej. "RUN-1-<resumen-corto>" o "K-3-arreglar-login").
+ * `here`: rama ya existente del ticket en este repo ({branch, local, remote, ts}): se continúa en ella.
  */
-export function gitInstructions(key, branch) {
-    return `Git: trabaja en una rama propia (si estás en main, master o develop, crea una llamada ${branch}). ` +
-        `Haz commits pequeños a medida que completes partes, con mensajes que empiecen por "${key}: ". ` +
-        'Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con ' +
+export function gitInstructions(key, branch, here = null, now = Date.now() / 1000) {
+    const tail = 'Haz commits pequeños a medida que completes partes, con mensajes que empiecen por ' +
+        `"${key}: ". Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con ` +
         '`git push -u origin <rama>`. Nunca hagas push a main, master ni develop, nunca uses force-push ' +
         'y no abras PR.\n';
+    if (!here?.branch)
+        return `Git: trabaja en una rama propia (si estás en main, master o develop, crea una llamada ${branch}). ${tail}`;
+    const b = here.branch;
+    const where = here.local && here.remote ? 'subida a origin' : here.local ? 'solo local' : 'solo en origin';
+    return `Git: Ya existe la rama \`${b}\` para este ticket en este repo (último commit ${relAgo(here.ts, now)}, ${where}). ` +
+        `Cámbiate a ella (git switch ${b}; si solo está en origin: git switch --track origin/${b}) y continúa ahí; ` +
+        `no crees otra rama. ${tail.replace('<rama>', b)}`;
 }
 
 /** Puro. Prompt para mandar una tarea local a Claude (lo reconoce agents.js ticketFromHead). */
-export function localTaskPrompt(task, repo = null, branch = null) {
+export function localTaskPrompt(task, repo = null, branch = null, existing = null) {
     let s = `Trabaja en la tarea ${task.id}: ${String(task.text ?? '').trim()}\n`;
     const desc = String(task.description ?? '').trim();
     if (desc)
@@ -184,6 +218,7 @@ export function localTaskPrompt(task, repo = null, branch = null) {
         s += `Repo de trabajo: ${repo.split('/').filter(Boolean).pop() ?? repo} (${repo})${branch ? `, rama ${branch}` : ''}\n`;
     if (!desc)
         s += 'La tarea tiene poco detalle: antes de cambiar código, explora el repo, resume lo que entiendes y pregúntame lo que falte.\n';
-    s += gitInstructions(task.id, `${task.id}-${taskSlug(task.text)}`);
+    const {here, other} = splitExisting(repo, existing);
+    s += other + gitInstructions(task.id, `${task.id}-${taskSlug(task.text)}`, here);
     return s;
 }

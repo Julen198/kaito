@@ -32,13 +32,13 @@ import {
 } from './common.js';
 import {KanbanBoard} from './kanban.js';
 import {InboxPanel} from './inboxui.js';
-import {STATE_NAMES, isLocalKey, todoState, withState, localTaskPrompt, taskSlug} from './board.js';
+import {STATE_NAMES, isLocalKey, todoState, withState, localTaskPrompt, taskSlug, relAgo} from './board.js';
 import {inboxPush, inboxRoute, unreadCount, pendingNeeds, resolveItem} from './inbox.js';
 import {QuietController} from './dnd.js';
 import {RING, MINI_RING, RING_TRACK, DIM_OPACITY, USAGE_COLUMNS, BADGE_ICONS, hexRgb, usageRows, panelRing} from './usage.js';
 import {PROVIDER_BY_ID} from './providers.js';
 import {quietLabel, snoozeLabel, snoozeUntil} from './quiet.js';
-import {findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
+import {findTicketBranches, findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
 import {fetchTransitions, applyTransition, pickTransition, REVIEW_RE, assignToMe, fetchMyself} from './jiradraft.js';
 import {ReminderManager} from './reminders.js';
 import {ReplyModal, CommentModal, TaskResultModal} from './reply.js';
@@ -58,7 +58,7 @@ const KANBAN_KEY = 'kanban-shortcut'; // clave nueva del esquema (0.5.0): sin vo
 const STATE_PILL = {todo: 'kaito-pill-new', doing: 'kaito-pill-doing', review: 'kaito-pill-review', done: 'kaito-pill-done'};
 const PILL = {new: 'kaito-pill-new', indeterminate: 'kaito-pill-progress', done: 'kaito-pill-done'};
 const PICK_MAX = 12;
-const PICK_PILL = {issue: 'este ticket', match: 'coincide', project: 'último'};
+const PICK_PILL = {branch: 'tiene rama', issue: 'este ticket', match: 'coincide', project: 'último'};
 const DONE_MIN_MS = 3 * 60 * 1000; // aviso de "terminó" solo tras trabajar al menos esto
 const MOVED_MSG = 'Movido en Jira';
 const MOVE_PER_ROW = 2; // botones de "Mover a" por fila
@@ -1949,9 +1949,29 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         } catch (e) {
             console.error(`kaito: repos: ${e.message}`);
         }
-        repos = rankRepos(issue, repos, this._cfg, p => GLib.file_test(p, GLib.FileTest.IS_DIR));
-        this._jiraPick = {issue, repos, query: '', focus: this.menu.isOpen ? 0 : 1, entries: []};
+        const exists = p => GLib.file_test(p, GLib.FileTest.IS_DIR);
+        repos = rankRepos(issue, repos, this._cfg, exists);
+        const pick = {issue, repos, query: '', focus: this.menu.isOpen ? 0 : 1, entries: [], searching: true};
+        this._jiraPick = pick;
         this._renderSection('jira');
+        // Busca (sin bloquear) si el ticket ya tiene rama en algún repo candidato.
+        findTicketBranches(issue.key, repos.map(r => r.path), {cancellable: this._cancellable}).then(found => {
+            this._ticketBranches = {key: issue.key, found};
+            if (this._cancellable.is_cancelled() || this._jiraPick !== pick)
+                return;
+            pick.searching = false;
+            const byRepo = {};
+            for (const f of found)
+                byRepo[f.repo] ??= f;
+            pick.repos = rankRepos(issue, repos, this._cfg, exists, byRepo);
+            this._renderSection('jira');
+        }).catch(e => {
+            console.warn(`kaito: ramas de ${issue.key}: ${e.message}`);
+            if (this._jiraPick === pick) {
+                pick.searching = false;
+                this._renderSection('jira');
+            }
+        });
     }
 
     /** Entrada de búsqueda del selector (una por destino: menú y tarjeta). */
@@ -2003,6 +2023,11 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         head.add_child(mkLabel(issue.key, 'kaito-key'));
         specs.push({actor: head});
         specs.push({actor: this._pickEntry(idx)});
+        if (this._jiraPick.searching) {
+            const s = content();
+            s.add_child(mkLabel(`Buscando rama de ${issue.key}…`, 'kaito-muted'));
+            specs.push({actor: s});
+        }
         if (!repos.length)
             specs.push(this._emptySpec(all.length ? 'Ninguna carpeta coincide' : 'No hay repos'));
         for (const r of repos) {
@@ -2014,7 +2039,9 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 parent = `~${parent.slice(home.length)}`;
             row.add_child(mkLabel(name, 'kaito-repo kaito-repo-pick'));
             row.add_child(ellipsized(mkLabel(parent, 'kaito-muted')));
-            if (r === repos[0] && (!query.trim() || r.why))
+            if (r.branch)
+                row.add_child(ellipsized(mkLabel(`${r.branch.branch} · ${relAgo(r.branch.ts)}`, 'kaito-muted')));
+            if (r.why === 'branch' || (r === repos[0] && (!query.trim() || r.why)))
                 row.add_child(mkLabel(PICK_PILL[r.why] ?? 'último', 'kaito-pill kaito-pill-progress'));
             specs.push({actor: row, activate: () => this._sendToClaude(issue, r.path), keepOpen: true});
         }
@@ -2078,10 +2105,11 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         } catch (e) {
             console.error(`kaito: descripción de ${issue.key}: ${e.message}`);
         }
+        const existing = await this._existingBranch(issue.key, repo);
         if (this._cancellable.is_cancelled())
             return;
         try {
-            sendIssueToClaude({issue, base, description, repo, terminal: this._cfg.terminal});
+            sendIssueToClaude({issue, base, description, repo, terminal: this._cfg.terminal, existing});
             Main.notify('Kaito', `${issue.key} enviado a Claude en ${GLib.path_get_basename(repo)}`);
         } catch (e) {
             Main.notify('Kaito', `No se pudo mandar ${issue.key} a Claude: ${e.message}`);
@@ -2089,6 +2117,23 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         }
         if (issue.category === 'new')
             await this._autoStart(issue);
+    }
+
+    /**
+     * Rama ya existente de `key`: la del repo elegido (consulta rápida y exacta) o, si no hay, la mejor
+     * de otro repo según la última búsqueda del selector. null si no hay ninguna.
+     */
+    async _existingBranch(key, repo) {
+        try {
+            const here = await findTicketBranches(key, [repo], {cancellable: this._cancellable});
+            if (here[0])
+                return here[0];
+            const t = this._ticketBranches;
+            return t?.key === key ? t.found.find(f => f.repo !== repo) ?? null : null;
+        } catch (e) {
+            console.warn(`kaito: rama de ${key}: ${e.message}`);
+            return null;
+        }
     }
 
     /** Ticket "Por hacer" mandado a Claude: pasa a la primera transición "en curso". */
@@ -2681,7 +2726,19 @@ export default class KaitoMain {
             console.warn(`kaito: repos: ${e.message}`);
         }
         const issue = {key: task?.id ?? '', summary: task?.text ?? '', description: task?.description ?? ''};
-        return rankRepos(issue, repos, ind?._cfg ?? readConfig(), p => GLib.file_test(p, GLib.FileTest.IS_DIR));
+        const byRepo = {};
+        if (this._taskBranches?.key === issue.key)
+            for (const f of this._taskBranches.found)
+                byRepo[f.repo] ??= f;
+        return rankRepos(issue, repos, ind?._cfg ?? readConfig(), p => GLib.file_test(p, GLib.FileTest.IS_DIR), byRepo);
+    }
+
+    /** Busca ramas de la tarea en los repos candidatos (sin bloquear); guarda el resultado para _repoList. */
+    async _findTaskBranches(task) {
+        const paths = this._repoList(task).map(r => r.path);
+        const found = await findTicketBranches(task.id, paths, {cancellable: this._indicator?._cancellable ?? null});
+        this._taskBranches = {key: task.id, found};
+        return found;
     }
 
     _kanbanHooks() {
@@ -2692,6 +2749,7 @@ export default class KaitoMain {
                 return task.repo && !list.includes(task.repo) ? [task.repo, ...list] : list;
             },
             allRepos: task => this._repoList(task),
+            findBranches: task => this._findTaskBranches(task),
             chooseFolder: title => this._chooseFolder(title),
             send: (task, repo) => this._sendTaskToClaude(task, repo),
             scheduleReview: task => this.openTaskCapture(REVIEW_PREFILL(task.id)),
@@ -2722,13 +2780,20 @@ export default class KaitoMain {
     }
 
     /** "Mandar a Claude" desde el tablero: mismo lanzamiento que un ticket, con el prompt de la tarea. */
-    _sendTaskToClaude(task, repo) {
+    async _sendTaskToClaude(task, repo) {
         const cfg = readConfig();
+        let existing = null;
         try {
-            const branch = `${task.id}-${taskSlug(task.text)}`;
+            existing = (await findTicketBranches(task.id, [repo], {cancellable: this._indicator?._cancellable ?? null}))[0]
+                ?? (this._taskBranches?.key === task.id ? this._taskBranches.found.find(f => f.repo !== repo) : null) ?? null;
+        } catch (e) {
+            console.warn(`kaito: rama de ${task.id}: ${e.message}`);
+        }
+        try {
+            const branch = existing?.repo === repo ? existing.branch : `${task.id}-${taskSlug(task.text)}`;
             sendIssueToClaude({
                 issue: {key: task.id, summary: task.text}, base: '', description: null, repo, terminal: cfg.terminal,
-                prompt: localTaskPrompt(task, repo, repoBranch(repo)),
+                prompt: localTaskPrompt(task, repo, repoBranch(repo), existing),
             });
             patchBoardTask(task.id, x => ({...withState(x, todoState(x) === 'todo' ? 'doing' : todoState(x)), repo}));
             Main.notify('Kaito', `${task.id} enviada a Claude en ${GLib.path_get_basename(repo)} · rama ${branch}`);

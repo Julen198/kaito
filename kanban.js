@@ -13,7 +13,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {readBoard, patchBoardTask, addBoardTask, filterRepos} from './common.js';
 import {
     STATES, STATE_NAMES, STATE_COLORS, PRIORITY_GLYPHS, DEFAULT_PRIORITY, boardColumns, boardCounts, withState,
-    stepState, cyclePriority, todoState,
+    stepState, cyclePriority, todoState, relAgo,
 } from './board.js';
 import {agoLabel} from './inbox.js';
 
@@ -524,6 +524,8 @@ export class KanbanBoard {
         let all = null;
         const fill = () => {
             list.destroy_all_children();
+            if (p.searching)
+                list.add_child(lbl(`Buscando rama de ${d.task.id ?? 'la tarea'}…`, 'kaito-capture-muted'));
             all ??= (() => {
                 try {
                     return this._hooks.allRepos?.(d.task) ?? [];
@@ -539,6 +541,10 @@ export class KanbanBoard {
                 const row = new St.BoxLayout({style: 'spacing: 8px;'});
                 row.add_child(lbl(base(r.path), 'kaito-repo kaito-repo-pick'));
                 row.add_child(lbl(tilde(r.path.slice(0, r.path.lastIndexOf('/'))), 'kaito-capture-muted'));
+                if (r.branch) {
+                    row.add_child(lbl(`${r.branch.branch} · ${relAgo(r.branch.ts)}`, 'kaito-capture-muted'));
+                    row.add_child(lbl('tiene rama', 'kaito-pill kaito-pill-progress'));
+                }
                 const b = new St.Button({style_class: 'kaito-board-pick-row', child: row, can_focus: true, track_hover: true, x_expand: true, x_align: Clutter.ActorAlign.FILL});
                 b.connect('clicked', () => this._pickRepo(r.path));
                 list.add_child(b);
@@ -556,6 +562,18 @@ export class KanbanBoard {
         box.add_child(entry);
         fill();
         box.add_child(list);
+        if (d.task.id && this._hooks.findBranches && p.searched !== d.task.id) {
+            p.searched = d.task.id;
+            p.searching = true;
+            fill();
+            Promise.resolve(this._hooks.findBranches(d.task)).catch(e => console.warn(`kaito: ramas: ${e.message}`)).then(() => {
+                p.searching = false;
+                if (this._detail === d && d.picker === p) {
+                    this._renderDetail(); // se reordena con las ramas encontradas
+                    d.pickEntry?.grab_key_focus();
+                }
+            });
+        }
         const foot = new St.BoxLayout({style: 'spacing: 8px;'});
         if (GLib.find_program_in_path('zenity')) {
             foot.add_child(button('Otra carpeta…', 'kaito-board-chip-btn', async () => {

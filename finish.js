@@ -207,15 +207,20 @@ export function dirsFromPaths(paths, isDir) {
     return dirs;
 }
 
+/** Puro. Regex que casa `key` sin mayúsculas y con límites (RUN-5 no casa con RUN-50 ni con XRUN-5); null si no hay clave. */
+function keyRe(key) {
+    const k = String(key ?? '');
+    return k ? new RegExp(`(?<![a-z0-9])${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`, 'i') : null;
+}
+
 /**
  * Puro. Salida de `for-each-ref --format=%(refname:short) %(committerdate:unix)` → ramas cuyo nombre
  * contiene `key` (sin mayúsculas) con último commit >= sinceS, el más reciente primero: [{branch, ts}].
  */
 export function ticketBranches(text, key, sinceS) {
-    const k = String(key ?? '');
-    if (!k)
+    const re = keyRe(key);
+    if (!re)
         return [];
-    const re = new RegExp(`(?<![a-z0-9])${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`, 'i'); // RUN-5 no casa con RUN-50
     const found = [];
     for (const l of String(text ?? '').split('\n')) {
         const i = l.lastIndexOf(' ');
@@ -342,4 +347,115 @@ export async function findTicketWork(cwd, key, sinceS, cancellable = null, {sess
             return {repo: r, ...w};
     }
     return null;
+}
+
+/**
+ * Puro. Salida de `for-each-ref --format=%(refname)<TAB>%(committerdate:unix)<TAB>%(upstream:short)
+ * refs/heads refs/remotes` → ramas cuyo nombre contiene `key` (límites seguros), con la local y la
+ * remota del mismo nombre fusionadas, más reciente primero: [{branch, local, remote, ts, upstream}].
+ * Omite `<remoto>/HEAD`.
+ */
+export function parseBranchRefs(text, key) {
+    const re = keyRe(key);
+    if (!re)
+        return [];
+    const by = new Map();
+    for (const l of String(text ?? '').split('\n')) {
+        const [ref, tsRaw, upstream] = l.split('\t');
+        const ts = Number(tsRaw);
+        let name, kind;
+        if (ref?.startsWith('refs/heads/')) {
+            name = ref.slice(11);
+            kind = 'local';
+        } else if (ref?.startsWith('refs/remotes/')) {
+            const rest = ref.slice(13);
+            name = rest.slice(rest.indexOf('/') + 1);
+            kind = 'remote';
+            if (!rest.includes('/') || name === 'HEAD')
+                continue;
+        } else {
+            continue;
+        }
+        if (!name || !Number.isFinite(ts) || !re.test(name))
+            continue;
+        const e = by.get(name) ?? {branch: name, local: false, remote: false, ts: 0, upstream: null};
+        e[kind] = true;
+        e.ts = Math.max(e.ts, ts);
+        if (kind === 'local' && upstream)
+            e.upstream = upstream;
+        by.set(name, e);
+    }
+    return [...by.values()].sort((a, b) => b.ts - a.ts);
+}
+
+/** Puro. `git worktree list --porcelain` → Map rama → ruta del worktree donde está activa. */
+export function parseWorktrees(text) {
+    const out = new Map();
+    let path = null;
+    for (const l of String(text ?? '').split('\n')) {
+        if (l.startsWith('worktree '))
+            path = l.slice(9);
+        else if (l.startsWith('branch refs/heads/') && path)
+            out.set(l.slice(18), path);
+    }
+    return out;
+}
+
+/** git con tiempo máximo: mata el proceso si tarda más de `ms`. */
+async function gitTimed(repo, args, ms, cancellable) {
+    let proc;
+    try {
+        proc = Gio.Subprocess.new(['git', '-C', repo, ...args], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+    } catch (_e) {
+        return null;
+    }
+    const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+        proc.force_exit();
+        return GLib.SOURCE_REMOVE;
+    });
+    try {
+        const [out] = await proc.communicate_utf8_async(null, cancellable);
+        return proc.get_successful() ? String(out ?? '') : null;
+    } catch (_e) {
+        proc.force_exit();
+        return null;
+    } finally {
+        GLib.source_remove(id);
+    }
+}
+
+const BRANCH_REPOS_MAX = 40;
+const BRANCH_PARALLEL = 6;
+
+/**
+ * Ramas (locales y de seguimiento remoto, sin red) cuyo nombre contiene `key` en `repos` (rutas; máx. 40,
+ * `perRepoMs` por repo). Si la rama está activa en otro worktree, el resultado apunta a ese worktree.
+ * Devuelve [{repo, branch, local, remote, ts, upstream}] con el último commit más reciente primero.
+ */
+export async function findTicketBranches(key, repos, {cancellable = null, perRepoMs = 3000} = {}) {
+    if (!keyRe(key))
+        return [];
+    const list = [...new Set(repos ?? [])].filter(r => typeof r === 'string' && r.startsWith('/')).slice(0, BRANCH_REPOS_MAX);
+    const found = new Map(); // `${repo}\0${branch}` → entrada
+    let next = 0;
+    const worker = async () => {
+        while (next < list.length && !cancellable?.is_cancelled()) {
+            const repo = list[next++];
+            const refs = await gitTimed(repo, ['for-each-ref', '--format=%(refname)%09%(committerdate:unix)%09%(upstream:short)',
+                'refs/heads', 'refs/remotes'], perRepoMs, cancellable);
+            const hits = parseBranchRefs(refs, key);
+            if (!hits.length)
+                continue;
+            const wts = parseWorktrees(await gitTimed(repo, ['worktree', 'list', '--porcelain'], perRepoMs, cancellable));
+            for (const h of hits) {
+                const at = wts.get(h.branch) ?? repo;
+                const k = `${at}\0${h.branch}`;
+                const prev = found.get(k);
+                found.set(k, prev ? {...prev, local: prev.local || h.local, remote: prev.remote || h.remote, ts: Math.max(prev.ts, h.ts)}
+                    : {repo: at, ...h});
+            }
+        }
+    };
+    await Promise.all(Array.from({length: Math.min(BRANCH_PARALLEL, list.length)}, worker));
+    return [...found.values()].sort((a, b) => b.ts - a.ts);
 }

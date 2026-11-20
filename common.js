@@ -7,7 +7,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {parseTail, ticketFromHead} from './agents.js';
 import {normalizeWorkHours, snoozeMinutesOr} from './quiet.js';
-import {gitInstructions, migrateTodos, newTask} from './board.js';
+import {gitInstructions, migrateTodos, newTask, splitExisting} from './board.js';
 import {normalizeInbox} from './inbox.js';
 import {USAGE_COLORS, usageColor, formatReset, opencodeProvider, normalizePanelProvider} from './usage.js';
 import {
@@ -1024,22 +1024,22 @@ export function repoTokens(path) {
 
 /**
  * Puro. Ordena repos [{path}] (ya por recencia) para un ticket: 1) usado para este ticket, 2) nombre que
- * aparece en resumen/etiquetas/componentes (más coincidencias primero), 3) usado en el proyecto, 4) recencia.
- * Devuelve [{path, why}] con why 'issue' | 'match' | 'project' | null (solo el primero se marca en la UI).
+ * aparece en resumen/etiquetas/componentes (más coincidencias primero), 3) usado en el proyecto, 4) recencia; antes de todo, repos con rama del ticket (`branches`: {ruta: match}).
+ * Devuelve [{path, why}] con why 'branch' | 'issue' | 'match' | 'project' | null (solo el primero se marca en la UI).
  */
-export function rankRepos(issue, repos, cfg, exists = () => true) {
+export function rankRepos(issue, repos, cfg, exists = () => true, branches = {}) {
     const byIssue = cfg.jiraRepoByIssue?.[issue.key];
     const byProject = cfg.jiraRepoByProject?.[projectOf(issue.key)];
     const text = norm([issue.summary, issue.text ?? '', ...(issue.labels ?? []), ...(issue.components ?? [])].join(' '));
-    const paths = [...new Set([byIssue, byProject, ...repos.map(r => r.path)]
+    const paths = [...new Set([byIssue, byProject, ...Object.keys(branches ?? {}), ...repos.map(r => r.path)]
         .filter(p => typeof p === 'string' && p.startsWith('/') && exists(p)))];
     const scored = paths.map((path, i) => {
         const hits = repoTokens(path).filter(t => text.includes(t)).length;
-        const rank = path === byIssue ? 3 : hits ? 2 : path === byProject ? 1 : 0;
-        return {path, i, hits, rank, why: ['issue', 'match', 'project'][3 - rank] ?? null};
+        const rank = branches?.[path] ? 4 : path === byIssue ? 3 : hits ? 2 : path === byProject ? 1 : 0;
+        return {path, i, hits, rank, why: ['branch', 'issue', 'match', 'project'][4 - rank] ?? null};
     });
     scored.sort((a, b) => b.rank - a.rank || b.hits - a.hits || a.i - b.i);
-    return scored.map(({path, why}) => ({path, why}));
+    return scored.map(({path, why}) => ({path, why, ...(branches?.[path] ? {branch: branches[path]} : {})}));
 }
 
 const SCAN_SKIP = new Set(['node_modules', 'vendor']);
@@ -1114,7 +1114,7 @@ export function repoBranch(repo) {
  * más antiguos y luego la descripción). `detail` es el resultado de formatIssueDetail, un string
  * (solo descripción) o null.
  */
-export function buildPrompt(issue, base, detail, repo = null, branch = null) {
+export function buildPrompt(issue, base, detail, repo = null, branch = null, existing = null) {
     const d = typeof detail === 'string' ? {description: detail} : detail ?? {};
     const comments = [...d.comments ?? []];
     let description = d.description ?? '';
@@ -1126,7 +1126,8 @@ export function buildPrompt(issue, base, detail, repo = null, branch = null) {
         s += 'Todo el contenido del ticket está abajo; no intentes abrir el enlace de Jira (requiere login).\n';
         if (little)
             s += 'El ticket tiene poco detalle: antes de cambiar código, explora el repo, resume lo que entiendes y pregúntame lo que falte.\n';
-        s += gitInstructions(issue.key, `${issue.key}-<resumen-corto>`);
+        const {here, other} = splitExisting(repo, existing);
+        s += other + gitInstructions(issue.key, `${issue.key}-<resumen-corto>`, here);
         const blocks = [d.meta, description && `Descripción:\n${description}`, d.extra,
             comments.length && `Comentarios:\n${comments.join('\n')}`].filter(Boolean);
         return blocks.length ? `${s}\n${blocks.join('\n\n')}\n` : s;
@@ -1332,7 +1333,7 @@ export function cancelPendingUris() {
  * `prompt`: prompt ya construido (tareas K-<n> del tablero); sin él se construye el del ticket de Jira.
  * Devuelve {terminal, promptPath, yamlPath?|tomlPath?, uri?, argv?}.
  */
-export function sendIssueToClaude({issue, base, description, repo, terminal, prompt = null}, launch = null, probe = defaultProbe) {
+export function sendIssueToClaude({issue, base, description, repo, terminal, prompt = null, existing = null}, launch = null, probe = defaultProbe) {
     if (!KEY_RE.test(issue.key))
         throw new Error(`clave no válida: ${issue.key}`);
     if (!repo.startsWith('/') || !GLib.file_test(repo, GLib.FileTest.IS_DIR))
@@ -1343,7 +1344,7 @@ export function sendIssueToClaude({issue, base, description, repo, terminal, pro
     GLib.mkdir_with_parents(PROMPTS_DIR, 0o700);
     const promptPath = GLib.build_filenamev([PROMPTS_DIR, `${issue.key}.txt`]);
     // `prompt`: texto ya hecho (tareas locales del tablero, board.js localTaskPrompt); si no, el del ticket.
-    GLib.file_set_contents(promptPath, prompt ?? buildPrompt(issue, base, description, repo, repoBranch(repo)));
+    GLib.file_set_contents(promptPath, prompt ?? buildPrompt(issue, base, description, repo, repoBranch(repo), existing));
     const openUri = launch ?? (o => openUriSoon(o.uri));
     if (term.id === 'warp') {
         GLib.mkdir_with_parents(WARP_TAB_DIR, 0o755);

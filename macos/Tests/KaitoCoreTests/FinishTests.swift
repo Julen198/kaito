@@ -71,6 +71,63 @@ final class FinishTests: XCTestCase {
         XCTAssertEqual(Finish.ticketBranches(refs, key: "RUN-5", sinceS: 100).map { "\($0.branch)@\(Int($0.ts))" }, ["run-5-Algo@300", "feature/RUN-5-b@200"])
     }
 
+    func testBranchRefsAndPromptVariant() {
+        let T = "\t"
+        let txt = ["refs/heads/main\(T)100\(T)", "refs/heads/RUN-5-a\(T)300\(T)origin/RUN-5-a", "refs/remotes/origin/RUN-5-a\(T)250\(T)",
+                   "refs/remotes/origin/HEAD\(T)100\(T)", "refs/remotes/origin/feature/run-5-b\(T)200\(T)", "refs/heads/RUN-50-x\(T)400\(T)",
+                   "refs/remotes/origin/XRUN-5\(T)500\(T)", "basura"].joined(separator: "\n")
+        let got = Finish.parseBranchRefs(txt, key: "RUN-5")
+        XCTAssertEqual(got, [TicketBranch(branch: "RUN-5-a", local: true, remote: true, ts: 300, upstream: "origin/RUN-5-a"),
+                             TicketBranch(branch: "feature/run-5-b", local: false, remote: true, ts: 200)])
+        XCTAssertEqual(Finish.parseBranchRefs(txt, key: ""), [])
+        XCTAssertEqual(Finish.parseWorktrees("worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nbranch refs/heads/RUN-1-x\n"), ["main": "/a", "RUN-1-x": "/b"])
+        // prompt
+        var issue = JiraIssue(key: "RUN-123"); issue.summary = "x"
+        let NOW = 1_000_000_000.0
+        let here = TicketBranch(repo: "/h/kontan", branch: "RUN-123-login", local: true, remote: true, ts: NOW - 3 * 86400)
+        let p = JiraViews.buildPrompt(issue, base: "b", detail: nil, repo: "/h/kontan", existing: here, now: NOW)
+        XCTAssertTrue(p.contains("Git: Ya existe la rama `RUN-123-login` para este ticket en este repo (último commit hace 3 d, subida a origin). "))
+        XCTAssertTrue(p.contains("Cámbiate a ella (git switch RUN-123-login; si solo está en origin: git switch --track origin/RUN-123-login) y continúa ahí; no crees otra rama. "))
+        XCTAssertTrue(p.hasSuffix("con mensajes que empiecen por \"RUN-123: \". Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con `git push -u origin RUN-123-login`. Nunca hagas push a main, master ni develop, nunca uses force-push y no abras PR.\n"))
+        XCTAssertFalse(p.contains("crea una llamada") || p.contains("Ojo:"))
+        XCTAssertTrue(JiraViews.gitParagraph(key: "RUN-123", branch: "x", here: TicketBranch(branch: "b", local: true, remote: false, ts: NOW), now: NOW).contains("hace menos de 1 min, solo local)"))
+        XCTAssertTrue(JiraViews.gitParagraph(key: "RUN-123", branch: "x", here: TicketBranch(branch: "b", local: false, remote: true, ts: NOW), now: NOW).contains("solo en origin)"))
+        let o = JiraViews.buildPrompt(issue, base: "b", detail: nil, repo: "/h/otro", existing: here, now: NOW)
+        XCTAssertTrue(o.contains("Ojo: hay una rama de este ticket en kontan (RUN-123-login).\nGit: trabaja en una rama propia"))
+        XCTAssertEqual(JiraViews.buildPrompt(issue, base: "b", detail: nil, repo: "/h/kontan", existing: nil), JiraViews.buildPrompt(issue, base: "b", detail: nil, repo: "/h/kontan"))
+        XCTAssertEqual([JiraViews.relAgo(NOW - 600, now: NOW), JiraViews.relAgo(NOW - 7300, now: NOW)], ["hace 10 min", "hace 2 h"])
+        // ranking
+        let r = JiraViews.rankRepos(issue, repos: ["/h/a", "/h/b"], byIssue: ["RUN-123": "/h/a"], byProject: [:],
+                                    branches: ["/h/b": here, "/w/c": here])
+        XCTAssertEqual(r.map { "\($0.path):\($0.why ?? "null")" }, ["/h/b:branch", "/w/c:branch", "/h/a:issue"])
+        XCTAssertEqual(r[0].branch, here)
+    }
+
+    func testFindTicketBranchesGit() throws {
+        guard FileManager.default.isExecutableFile(atPath: Git.bin) else { throw XCTSkip("sin git") }
+        let tmp = NSTemporaryDirectory() + "kaito-fb-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let id = ["-c", "user.name=t", "-c", "user.email=t@t"]
+        func g(_ dir: String, _ a: [String]) { _ = Git.run(dir, id + a) }
+        let origin = "\(tmp)/origin.git", a = "\(tmp)/a", b = "\(tmp)/b"
+        for d in [origin, a, b] { try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true) }
+        g(origin, ["init", "-q", "--bare", "-b", "main"])
+        for d in [a, b] { g(d, ["init", "-q", "-b", "main"]); g(d, ["commit", "-q", "--allow-empty", "-m", "i"]) }
+        g(a, ["switch", "-q", "-c", "run-77-cards"])
+        g(a, ["switch", "-q", "main"])
+        g(b, ["remote", "add", "origin", origin])
+        g(b, ["branch", "RUN-77-y"]); g(b, ["push", "-q", "origin", "RUN-77-y"]); g(b, ["branch", "-q", "-D", "RUN-77-y"])
+        let got = Finish.findTicketBranches(key: "RUN-77", repos: [a, b, "/no/existe"])
+        XCTAssertEqual(Set(got.map { "\($0.repo)|\($0.branch)|\($0.local)|\($0.remote)" }),
+                       ["\(a)|run-77-cards|true|false", "\(b)|RUN-77-y|false|true"])
+        XCTAssertEqual(Finish.findTicketBranches(key: "RUN-7", repos: [a, b]), [])
+        let wt = "\(tmp)/wt"
+        g(a, ["worktree", "add", "-q", wt, "run-77-cards"])
+        XCTAssertEqual(Finish.findTicketBranches(key: "RUN-77", repos: [a]).map(\.repo).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path },
+                       [URL(fileURLWithPath: wt).resolvingSymlinksInPath().path])
+    }
+
     func testTicketFromHeadLocalTask() {
         let line = JSON.object(["type": "user", "message": ["content": "Trabaja en la tarea K-3: arreglar algo"]]).serialized()
         XCTAssertEqual(AgentParsing.ticketFromHead(line), .ticket("K-3"))

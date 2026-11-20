@@ -38,6 +38,9 @@ final class AppModel: ObservableObject {
     @Published var repoPickIssue: JiraIssue?
     @Published var repoChoices: [RankedRepo] = []
     @Published var allRepos: [String] = []
+    @Published var searchingBranches = false
+    /// Ramas ya existentes del ticket del selector (resultado de la última búsqueda), por si se elige otro repo.
+    var foundBranches: [TicketBranch] = []
 
     @Published var flash: String?
     @Published var update: Updates.Release?
@@ -357,6 +360,22 @@ final class AppModel: ObservableObject {
                 guard m.repoPickIssue?.key == i.key else { return }
                 m.repoChoices = ranked
                 m.allRepos = ranked.map(\.path)
+                m.searchingBranches = true
+                m.foundBranches = []
+            }
+            // Busca sin bloquear si el ticket ya tiene rama en algún repo candidato.
+            let found = Finish.findTicketBranches(key: i.key, repos: ranked.map(\.path))
+            var byRepo: [String: TicketBranch] = [:]
+            for f in found where byRepo[f.repo] == nil { byRepo[f.repo] = f }
+            let reranked = JiraViews.rankRepos(i, repos: all, byIssue: cfg.jiraRepoByIssue, byProject: cfg.jiraRepoByProject,
+                                               exists: FileUtil.isDir, branches: byRepo)
+            await MainActor.run {
+                let m = AppModel.shared
+                guard m.repoPickIssue?.key == i.key else { return }
+                m.foundBranches = found
+                m.repoChoices = reranked
+                m.allRepos = reranked.map(\.path)
+                m.searchingBranches = false
             }
         }
     }
@@ -370,11 +389,15 @@ final class AppModel: ObservableObject {
             "jiraRepoByIssue": .object(cfg.jiraRepoByIssue.merging([issue.key: repo]) { $1 }.mapValues { .string($0) }),
             "jiraRepoByProject": .object(cfg.jiraRepoByProject.merging([JiraViews.projectOf(issue.key): repo]) { $1 }.mapValues { .string($0) }),
         ])
+        let others = foundBranches
         Task {
             var detail: IssueDetail? = nil
             if let client { detail = try? await client.issueDetail(issue.key) }
+            // Rama ya existente: la del repo elegido (consulta exacta) o, si no, la mejor de otro repo.
+            let existing = await Task.detached { Finish.findTicketBranches(key: issue.key, repos: [repo]).first }.value
+                ?? others.first(where: { $0.repo != repo })
             do {
-                let prompt = JiraViews.buildPrompt(issue, base: base, detail: detail, repo: repo, branch: Repos.branch(repo))
+                let prompt = JiraViews.buildPrompt(issue, base: base, detail: detail, repo: repo, branch: Repos.branch(repo), existing: existing)
                 let promptPath = "\(paths.promptsDir)/\(issue.key).txt"
                 try FileUtil.writeText(promptPath, prompt, dirMode: 0o700)
                 try Terminals.launchClaude(key: issue.key, repo: repo, promptPath: promptPath, preference: cfg.terminal)

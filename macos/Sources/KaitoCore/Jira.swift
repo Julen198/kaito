@@ -51,7 +51,8 @@ public struct IssueDetail: Equatable, Sendable {
 
 public struct RankedRepo: Equatable, Sendable {
     public var path: String
-    public var why: String? // issue | match | project
+    public var why: String? // branch | issue | match | project
+    public var branch: TicketBranch? = nil // rama existente del ticket en este repo (why == "branch")
 }
 
 /// Vistas, orden y texto de Jira (port de las funciones puras de common.js).
@@ -242,8 +243,43 @@ public enum JiraViews {
     public static let promptMax = 12000
     public static let keyRE = Regex("^[A-Z][A-Z0-9_]*-\\d+$")
 
+    /// "hace 5 min" / "hace 3 h" / "hace 2 d" a partir de un timestamp unix (s).
+    public static func relAgo(_ ts: Double, now: Double = Date().timeIntervalSince1970) -> String {
+        let d = max(0, now - ts)
+        if !d.isFinite { return "hace tiempo" }
+        if d < 60 { return "hace menos de 1 min" }
+        if d < 3600 { return "hace \(Int(d / 60)) min" }
+        if d < 86400 { return "hace \(Int(d / 3600)) h" }
+        return "hace \(Int(d / 86400)) d"
+    }
+
+    /// `here`: la rama existente está en `repo`; `other`: línea "Ojo: ..." si está en otro repo.
+    public static func splitExisting(repo: String?, existing: TicketBranch?) -> (here: TicketBranch?, other: String) {
+        guard let e = existing, !e.branch.isEmpty else { return (nil, "") }
+        if e.repo == repo { return (e, "") }
+        return (nil, "Ojo: hay una rama de este ticket en \(baseName(e.repo) ?? e.repo) (\(e.branch)).\n")
+    }
+
+    /// Párrafo de Git del prompt; con `here` (rama ya existente del ticket en el repo) se continúa en ella.
+    public static func gitParagraph(key: String, branch: String, here: TicketBranch? = nil, now: Double = Date().timeIntervalSince1970) -> String {
+        let tail = "Haz commits pequeños a medida que completes partes, con mensajes que empiecen por \"\(key): \". " +
+            "Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con " +
+            "`git push -u origin <rama>`. Nunca hagas push a main, master ni develop, nunca uses force-push " +
+            "y no abras PR.\n"
+        guard let h = here else {
+            return "Git: trabaja en una rama propia (si estás en main, master o develop, crea una llamada \(branch)). " + tail
+        }
+        let b = h.branch
+        let where_ = h.local && h.remote ? "subida a origin" : h.local ? "solo local" : "solo en origin"
+        return "Git: Ya existe la rama `\(b)` para este ticket en este repo (último commit \(relAgo(h.ts, now: now)), \(where_)). " +
+            "Cámbiate a ella (git switch \(b); si solo está en origin: git switch --track origin/\(b)) y continúa ahí; " +
+            "no crees otra rama. " + tail.replacingOccurrences(of: "<rama>", with: b)
+    }
+
     /// Prompt con todo el ticket (límite promptMax: se recortan primero los comentarios antiguos y luego la descripción).
-    public static func buildPrompt(_ issue: JiraIssue, base: String, detail: IssueDetail?, repo: String? = nil, branch: String? = nil) -> String {
+    public static func buildPrompt(_ issue: JiraIssue, base: String, detail: IssueDetail?, repo: String? = nil, branch: String? = nil,
+                                   existing: TicketBranch? = nil, now: Double = Date().timeIntervalSince1970) -> String {
+        let (here, other) = splitExisting(repo: repo, existing: existing)
         let d = detail ?? IssueDetail()
         var comments = d.comments
         var description = d.description
@@ -257,11 +293,7 @@ public enum JiraViews {
             if little {
                 s += "El ticket tiene poco detalle: antes de cambiar código, explora el repo, resume lo que entiendes y pregúntame lo que falte.\n"
             }
-            s += "Git: trabaja en una rama propia (si estás en main, master o develop, crea una llamada \(issue.key)-<resumen-corto>). " +
-                "Haz commits pequeños a medida que completes partes, con mensajes que empiecen por \"\(issue.key): \". " +
-                "Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con " +
-                "`git push -u origin <rama>`. Nunca hagas push a main, master ni develop, nunca uses force-push " +
-                "y no abras PR.\n"
+            s += other + gitParagraph(key: issue.key, branch: "\(issue.key)-<resumen-corto>", here: here, now: now)
             let blocks = [d.meta, description.isEmpty ? "" : "Descripción:\n\(description)", d.extra,
                           comments.isEmpty ? "" : "Comentarios:\n\(comments.joined(separator: "\n"))"].filter { !$0.isEmpty }
             return blocks.isEmpty ? s : "\(s)\n\(blocks.joined(separator: "\n\n"))\n"
@@ -312,23 +344,23 @@ public enum JiraViews {
 
     /// Ordena repos para un ticket: usado para este ticket > nombre que aparece en el ticket > usado en el proyecto > recencia.
     public static func rankRepos(_ issue: JiraIssue, repos: [String], byIssue: [String: String], byProject: [String: String],
-                                 exists: (String) -> Bool = { _ in true }) -> [RankedRepo] {
+                                 exists: (String) -> Bool = { _ in true }, branches: [String: TicketBranch] = [:]) -> [RankedRepo] {
         let bi = byIssue[issue.key]
         let bp = byProject[projectOf(issue.key)]
         let text = plainText(([issue.summary, issue.text] + issue.labels + issue.components).joined(separator: " "))
         var seen = Set<String>()
-        let paths = ([bi, bp].compactMap { $0 } + repos).filter { $0.hasPrefix("/") && exists($0) && seen.insert($0).inserted }
+        let paths = ([bi, bp].compactMap { $0 } + branches.keys.sorted() + repos).filter { $0.hasPrefix("/") && exists($0) && seen.insert($0).inserted }
         let scored = paths.enumerated().map { i, path -> (String, Int, Int, Int) in
             let hits = repoTokens(path).filter { text.contains($0) }.count
-            let rank = path == bi ? 3 : hits > 0 ? 2 : path == bp ? 1 : 0
+            let rank = branches[path] != nil ? 4 : path == bi ? 3 : hits > 0 ? 2 : path == bp ? 1 : 0
             return (path, i, hits, rank)
         }
-        let whys = [3: "issue", 2: "match", 1: "project"]
+        let whys = [4: "branch", 3: "issue", 2: "match", 1: "project"]
         return scored.sorted { a, b in
             if a.3 != b.3 { return a.3 > b.3 }
             if a.2 != b.2 { return a.2 > b.2 }
             return a.1 < b.1
-        }.map { RankedRepo(path: $0.0, why: whys[$0.3]) }
+        }.map { RankedRepo(path: $0.0, why: whys[$0.3], branch: branches[$0.0]) }
     }
 
     /// Filtra rutas: todos los términos deben aparecer (sin mayúsculas ni tildes) en la ruta.

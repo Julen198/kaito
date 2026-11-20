@@ -15,11 +15,11 @@ import {
     readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH, CLAUDE_PROJECTS,
     readBoard, readTodos, addBoardTask, patchBoardTask, readInbox, writeInbox, readJson, writeJson, TODOS_PATH, KANBAN_PATH,
 } from './common.js';
-import {localTaskPrompt} from './board.js';
+import {localTaskPrompt, gitInstructions, relAgo} from './board.js';
 import {inboxPush} from './inbox.js';
 import {queuePush, snoozeUntil, snoozeLabel, snoozeOptionLabel, snoozeMinutesOr, SNOOZE_CHOICES} from './quiet.js';
 import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork,
-    pathsFromTranscript, dirsFromPaths, ticketBranches, findTicketWork} from './finish.js';
+    pathsFromTranscript, dirsFromPaths, ticketBranches, findTicketWork, parseBranchRefs, parseWorktrees, findTicketBranches} from './finish.js';
 import {parseTail, ticketFromHead, firstLine} from './agents.js';
 
 let n = 0;
@@ -155,6 +155,38 @@ const GIT = 'Git: trabaja en una rama propia (si estás en main, master o develo
 eq(buildPrompt(issue, 'https://x.atlassian.net', null), head + NOTE + LITTLE + GIT, 'prompt');
 eq(buildPrompt(issue, 'b', 'x'.repeat(20000)).length <= PROMPT_MAX, true, 'prompt recortado');
 eq(buildPrompt(issue, 'b', 'x'.repeat(300)).includes('poco detalle'), false, 'descripción larga: sin aviso');
+
+// Prompt con rama existente
+{
+    const NOW = 1_000_000_000;
+    const here = {repo: '/h/kontan', branch: 'RUN-123-login', local: true, remote: true, ts: NOW - 3 * 86400};
+    const p = buildPrompt(issue, 'b', null, '/h/kontan', null, here);
+    eq(p.includes('Git: Ya existe la rama `RUN-123-login` para este ticket en este repo (último commit hace '), true, 'prompt rama: frase');
+    eq(p.includes('Cámbiate a ella (git switch RUN-123-login; si solo está en origin: git switch --track origin/RUN-123-login) y continúa ahí; no crees otra rama. '), true, 'prompt rama: switch');
+    eq(p.includes('crea una llamada') || p.includes('Ojo:'), false, 'prompt rama: sin párrafo nuevo ni aviso');
+    eq(p.endsWith('con mensajes que empiecen por "RUN-123: ". Al terminar deja todo commiteado (git status limpio) y sube la rama a origin con `git push -u origin RUN-123-login`. Nunca hagas push a main, master ni develop, nunca uses force-push y no abras PR.\n'), true, 'prompt rama: resto');
+    eq(gitInstructions('RUN-123', 'x', here, NOW).includes('hace 3 d, subida a origin)'), true, 'rama subida');
+    eq(gitInstructions('RUN-123', 'x', {...here, remote: false}, NOW).includes('hace 3 d, solo local)'), true, 'rama solo local');
+    eq(gitInstructions('RUN-123', 'x', {...here, local: false}, NOW).includes('hace 3 d, solo en origin)'), true, 'rama solo en origin');
+    const o = buildPrompt(issue, 'b', null, '/h/otro', null, here);
+    eq(o.includes('Ojo: hay una rama de este ticket en kontan (RUN-123-login).\n' + GIT), true, 'prompt rama en otro repo: aviso + párrafo habitual');
+    eq(buildPrompt(issue, 'b', null, '/h/kontan', null, null), buildPrompt(issue, 'b', null, '/h/kontan'), 'sin existing: igual');
+    const tp = localTaskPrompt({id: 'K-4', text: 'Arreglar login', description: 'd'}, '/h/kontan', null, {...here, branch: 'K-4-arreglar'});
+    eq(tp.includes('Ya existe la rama `K-4-arreglar`') && tp.includes('empiecen por "K-4: "'), true, 'tarea local con rama existente');
+    eq([relAgo(NOW - 30, NOW), relAgo(NOW - 600, NOW), relAgo(NOW - 7300, NOW), relAgo(NOW - 2 * 86400, NOW)],
+        ['hace menos de 1 min', 'hace 10 min', 'hace 2 h', 'hace 2 d'], 'relAgo');
+    // refs: local+remota fusionadas, HEAD omitido, límites del ticket
+    const T = '\t';
+    const txt = [`refs/heads/main${T}100${T}`, `refs/heads/RUN-5-a${T}300${T}origin/RUN-5-a`, `refs/remotes/origin/RUN-5-a${T}250${T}`,
+        `refs/remotes/origin/HEAD${T}100${T}`, `refs/remotes/origin/feature/run-5-b${T}200${T}`, `refs/heads/RUN-50-x${T}400${T}`,
+        `refs/remotes/origin/XRUN-5${T}500${T}`, `refs/remotes/upstream/RUN-5-a${T}260${T}`, 'basura'].join('\n');
+    eq(parseBranchRefs(txt, 'RUN-5'), [
+        {branch: 'RUN-5-a', local: true, remote: true, ts: 300, upstream: 'origin/RUN-5-a'},
+        {branch: 'feature/run-5-b', local: false, remote: true, ts: 200, upstream: null}], 'parseBranchRefs');
+    eq(rankRepos({key: 'RUN-5', summary: 'x'}, [{path: '/h/a'}, {path: '/h/b'}], {jiraRepoByIssue: {'RUN-5': '/h/a'}}, () => true, {'/h/b': {branch: 'RUN-5-a'}, '/w/c': {branch: 'RUN-5-z'}})
+        .map(r => `${r.path}:${r.why}`), ['/h/b:branch', '/w/c:branch', '/h/a:issue'], 'ranking: tiene rama primero');
+    eq([...parseWorktrees('worktree /a\nHEAD x\nbranch refs/heads/main\n\nworktree /b\nbranch refs/heads/RUN-1-x\n')], [['main', '/a'], ['RUN-1-x', '/b']], 'parseWorktrees');
+}
 
 const adfP = t => ({type: 'doc', version: 1, content: [{type: 'paragraph', content: [{type: 'text', text: t}]}]});
 const fake = {
@@ -575,6 +607,18 @@ if (GLib.find_program_in_path('git')) {
         const cw = await findTicketWork(repo, 'RUN-99', since);
         eq([cw.repo, cw.branch], [repo, 'RUN-9-algo'], 'findTicketWork: rama actual del cwd');
         eq((await findTicketWork(repo, 'RUN-9', since)).repo, repo, 'findTicketWork: rama del ticket en el cwd');
+        // findTicketBranches: local (repo2), solo remota origin/RUN-77-y (repo) y worktree
+        sh(repo, 'branch', 'RUN-77-y');
+        sh(repo, 'push', '-q', 'origin', 'RUN-77-y');
+        sh(repo, 'branch', '-q', '-D', 'RUN-77-y');
+        const fb = await findTicketBranches('RUN-77', [solo, repo2, repo, '/no/existe', tmp]);
+        eq(fb.map(b => [b.repo, b.branch, b.local, b.remote]).sort(), [[repo, 'RUN-77-y', false, true], [repo2, 'run-77-cards', true, false]].sort(), 'findTicketBranches: local y solo remota');
+        eq(fb.every(b => b.ts >= since2 - 7200 && typeof b.ts === 'number'), true, 'findTicketBranches: ts');
+        eq(await findTicketBranches('RUN-7', [repo2, repo]), [], 'findTicketBranches: RUN-7 no casa con RUN-77');
+        eq(await findTicketBranches('', [repo2]), [], 'findTicketBranches: sin clave');
+        const wt = `${tmp}/wt77`;
+        sh(repo2, 'worktree', 'add', '-q', wt, 'run-77-cards');
+        eq((await findTicketBranches('RUN-77', [repo2])).map(b => [b.repo, b.branch]), [[wt, 'run-77-cards']], 'findTicketBranches: rama activa en otro worktree');
     }
     print(`repo git temporal: ${repo}`);
 }

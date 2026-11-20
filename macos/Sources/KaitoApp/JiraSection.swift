@@ -184,6 +184,7 @@ struct RepoPicker: View {
     var body: some View {
         let filtered = JiraViews.filterRepos(model.allRepos, query: query)
         let why = Dictionary(uniqueKeysWithValues: model.repoChoices.map { ($0.path, $0.why) })
+        let branches = Dictionary(uniqueKeysWithValues: model.repoChoices.compactMap { r in r.branch.map { (r.path, $0) } })
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Mandar \(issue.key) a Claude").font(.callout.weight(.semibold))
@@ -196,6 +197,9 @@ struct RepoPicker: View {
                 .onSubmit {
                     if let first = filtered.first { model.sendToClaude(issue, repo: first) }
                 }
+            if model.searchingBranches {
+                Text("Buscando rama de \(issue.key)…").font(.caption).foregroundStyle(.secondary)
+            }
             if model.repoChoices.isEmpty {
                 ProgressView().controlSize(.small)
             } else if filtered.isEmpty {
@@ -205,14 +209,21 @@ struct RepoPicker: View {
                 Button {
                     model.sendToClaude(issue, repo: path)
                 } label: {
-                    HStack {
-                        Image(systemName: "folder")
-                        Text(baseName(path) ?? path).font(.callout)
-                        Text(tilde(path)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        if idx == 0, let w = why[path] ?? nil {
-                            Text(w == "issue" ? "usado en este ticket" : w == "match" ? "coincide" : "del proyecto")
-                                .font(.caption2).foregroundStyle(.teal)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack {
+                            Image(systemName: "folder")
+                            Text(baseName(path) ?? path).font(.callout)
+                            Text(tilde(path)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            if let w = why[path] ?? nil, w == "branch" || idx == 0 {
+                                Text(w == "branch" ? "tiene rama" : w == "issue" ? "usado en este ticket" : w == "match" ? "coincide" : "del proyecto")
+                                    .font(.caption2).foregroundStyle(.teal)
+                            }
+                        }
+                        if let b = branches[path] {
+                            Text("\(b.branch) · \(JiraViews.relAgo(b.ts))")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                .padding(.leading, 22)
                         }
                     }
                     .contentShape(Rectangle())
