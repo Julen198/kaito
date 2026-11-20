@@ -38,14 +38,20 @@ func activeScreen() -> NSScreen? {
 // MARK: - Captura rápida
 
 enum CaptureMode: String, CaseIterable, Identifiable {
-    case note, reminder, jira, task
+    case note, reminder, jira, kanban, task
+
+    /// Pestañas según la organización elegida: Jira o Kanban ocupan el mismo hueco; con la lista, ninguna.
+    static func available(_ organize: String) -> [CaptureMode] {
+        allCases.filter { ($0 != .jira || organize == "jira") && ($0 != .kanban || organize == "kanban") }
+    }
     var id: String { rawValue }
     var title: String {
         switch self {
         case .note: return "Nota"
         case .reminder: return "Recordatorio"
         case .jira: return "Jira"
-        case .task: return "Tarea"
+        case .kanban: return "Kanban"
+        case .task: return "Tarea programada"
         }
     }
     var hint: String {
@@ -53,6 +59,7 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         case .note: return "Escribe una nota"
         case .reminder: return "Qué y cuándo: «llamar a Iker en 20 min»"
         case .jira: return "Qué pasa: «el chat de Nike en FR no carga los cupones, urgente»"
+        case .kanban: return "Título de la tarea: «arreglar el login»"
         case .task: return "Cuándo y qué: «cada lunes a las 9 revisa en BigQuery las ventas»"
         }
     }
@@ -100,7 +107,8 @@ final class CaptureModel: ObservableObject {
         gen += 1
         stopTick()
         let saved = app.config.raw["captureMode"]?.string ?? "note"
-        mode = CaptureMode(rawValue: saved) ?? .note
+        let m = CaptureMode(rawValue: saved) ?? .note
+        mode = CaptureMode.available(app.config.organize).contains(m) ? m : .note
         text = ""
         error = nil
         stage = .input
@@ -188,6 +196,13 @@ final class CaptureModel: ObservableObject {
             }
         case .jira:
             if stage == .input { startDraft(t) }
+        case .kanban:
+            if let task = app.addBoardTask(t) {
+                app.show("\(task.id) creada en «Por hacer»")
+                onClose?()
+            } else {
+                error = "No se pudo crear la tarea"
+            }
         case .task:
             if !taskReview { startTaskReview(t) }
         }
@@ -355,7 +370,7 @@ struct CaptureView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
-                ForEach(CaptureMode.allCases) { m in Text(m.title).tag(m) }
+                ForEach(CaptureMode.available(model.app.config.organize)) { m in Text(m.title).tag(m) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -406,6 +421,9 @@ struct CaptureView: View {
                 Image(systemName: "alarm").foregroundStyle(model.reminderPreview == nil ? Color.secondary : Color.teal)
                 Text(model.reminderPreview ?? "Añade cuándo: «en 20 min», «a las 17:30», «mañana»")
                     .foregroundStyle(model.reminderPreview == nil ? Color.secondary : Color.primary)
+            case .kanban:
+                Circle().fill(BoardStyle.color("todo")).frame(width: 8, height: 8)
+                Text("Se crea en «Por hacer» del Kaito Kanban").foregroundStyle(.secondary)
             case .task:
                 Image(systemName: "clock").foregroundStyle(model.taskPreview == nil ? Color.secondary : Color.teal)
                 Text(model.taskPreview ?? "Añade cuándo: «cada lunes a las 9», «todos los días a las 8», «mañana a las 10»")

@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
     @Published var config = KaitoConfig()
     @Published var agents: [Agent] = []
     @Published var todos: [Todo] = []
+    @Published var board: [BoardTask] = [] // solo con organización "kanban"
     @Published var notes: [Note] = []
     @Published var reminders: [Reminder] = []
 
@@ -54,6 +55,7 @@ final class AppModel: ObservableObject {
     @Published var statusLineBusy = false
 
     let taskStore: TaskStore
+    let boardStore: BoardStore
     let codexUsage: Usage.CodexReader
     let launchedAt = Date()
     /// sessionId → desde cuándo trabaja; nil hasta la primera carga (no avisar de lo que ya estaba parado).
@@ -79,6 +81,7 @@ final class AppModel: ObservableObject {
         claude = ClaudeAgents(paths: paths)
         others = OtherAgents(paths: paths)
         taskStore = TaskStore(paths: paths)
+        boardStore = BoardStore(paths: paths)
         codexUsage = Usage.CodexReader(root: paths.codexSessions)
     }
 
@@ -146,6 +149,12 @@ final class AppModel: ObservableObject {
     /// Ficheros locales (config, pendientes, notas, recordatorios). Baratos: en el hilo principal.
     func refreshLocal() {
         reloadConfig()
+        // El tablero migra todos.json (ids K-<n>): solo si se ha elegido esa organización.
+        var b: [BoardTask] = []
+        if config.organize == "kanban" {
+            do { b = try boardStore.tasks() } catch { NSLog("kaito: tablero: \(error.localizedDescription)") }
+        }
+        if b != board { board = b }
         let t = data.todos(), n = data.notes(), r = data.reminders(), k = taskStore.read()
         if t != todos { todos = t }
         if n != notes { notes = n }
@@ -382,6 +391,10 @@ final class AppModel: ObservableObject {
 
     func sendToClaude(_ issue: JiraIssue, repo: String) {
         repoPickIssue = nil
+        if Finish.isLocalKey(issue.key) {
+            sendLocalToClaude(issue.key, repo: repo)
+            return
+        }
         let client = jiraClient()
         let base = jiraBase
         let cfg = config

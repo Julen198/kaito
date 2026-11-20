@@ -7,7 +7,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
 
-    @State private var jiraEnabled = true
+    @State private var organize = "kanban"
     @State private var jiraBaseUrl = ""
     @State private var jiraEmail = ""
     @State private var token = ""
@@ -50,7 +50,7 @@ struct SettingsView: View {
         VStack(spacing: 8) {
             TabView {
                 general.tabItem { Label("General", systemImage: "gearshape") }
-                jira.tabItem { Label("Jira", systemImage: "ticket") }
+                organization.tabItem { Label("Organización", systemImage: "rectangle.3.group") }
                 agents.tabItem { Label("Agentes", systemImage: "sparkles") }
                 notices.tabItem { Label("Avisos", systemImage: "bell") }
             }
@@ -109,9 +109,52 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var jira: some View {
+    static let organizeFeatures: [String: [String]] = [
+        "jira": ["Tickets de tu Jira: Mías, Sin asignar, Sprint y Recientes", "Transiciones «Mover a» desde el menú",
+                 "Mandar un ticket a Claude", "El ticket se abre en el navegador"],
+        "kanban": ["Tablero local de cuatro columnas", "Cada tarea se abre en un panel de Kaito",
+                   "Prioridad y repo por tarea", "Mandar una tarea a Claude con su rama K-n"],
+        "list": ["Pendientes para marcar", "Alta rápida desde el menú", "Sin columnas ni prioridades", "Sin panel de tarea"],
+    ]
+    static let organizeNames = ["jira": "Jira", "kanban": "Kaito Kanban", "list": "Lista de pendientes"]
+
+    private var organization: some View {
         Form {
-            Toggle("Mostrar Jira", isOn: $jiraEnabled)
+            Picker("Cómo te organizas", selection: $organize) {
+                Text("Jira").tag("jira")
+                Text("Kaito Kanban (local)").tag("kanban")
+                Text("Lista de pendientes").tag("list")
+            }
+            .pickerStyle(.radioGroup)
+            Section("Con \(Self.organizeNames[organize] ?? organize) tienes") {
+                ForEach(Self.organizeFeatures[organize] ?? [], id: \.self) { f in
+                    Label(f, systemImage: "checkmark").font(.callout)
+                }
+            }
+            if organize == "jira" {
+                jiraFields
+            } else if organize == "kanban" {
+                Section {
+                    HStack {
+                        Text("Las tareas se guardan en este equipo, numeradas K-1, K-2…").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Abrir tablero") {
+                            save()
+                            BoardWindowController.shared.show()
+                        }
+                    }
+                }
+            } else {
+                Section {
+                    Text("Si cambias luego a Kaito Kanban, tus pendientes pasan a «Por hacer».").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var jiraFields: some View {
+        Section("Conexión con Jira") {
             TextField("URL", text: $jiraBaseUrl, prompt: Text("https://tuempresa.atlassian.net"))
             TextField("Email", text: $jiraEmail)
             SecureField("API token", text: $token, prompt: Text(hasToken ? "Guardado en el llavero (déjalo vacío para conservarlo)" : "id.atlassian.com > Seguridad > API tokens"))
@@ -133,7 +176,6 @@ struct SettingsView: View {
                     .disabled(testing)
             }
         }
-        .formStyle(.grouped)
     }
 
     private var agents: some View {
@@ -216,7 +258,7 @@ struct SettingsView: View {
 
     private func load() {
         let c = model.configStore.read()
-        jiraEnabled = c.jiraEnabled
+        organize = c.organize
         jiraBaseUrl = c.jiraBaseUrl
         jiraEmail = c.jiraEmail
         hasToken = Keychain.token() != nil
@@ -259,7 +301,10 @@ struct SettingsView: View {
 
     private func save() {
         var patch: [String: JSON] = [
-            "jiraEnabled": .bool(jiraEnabled),
+            "organize": .string(organize),
+            // Claves que ya entiende la extensión de Linux.
+            "jiraEnabled": .bool(organize == "jira"),
+            "kanbanEnabled": .bool(organize == "kanban"),
             "jiraBaseUrl": .string(trimmed(jiraBaseUrl)),
             "jiraEmail": .string(trimmed(jiraEmail)),
             "jiraPreset": .string(preset),

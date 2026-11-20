@@ -73,6 +73,12 @@ Linux; pregunta antes y hace copia) y abre la app. Opciones: `--yes`, `--no-hook
   Jira (pestañas Mías / Sin asignar / Sprint / Recientes, prioridad, cambiar estado, Asignarme, abrir en el
   navegador, **Mandar a Claude** con selector de repo), Pendientes, Recordatorios y Notas; Ajustes con el token
   en el llavero de macOS (servicio `kaito-jira`).
+- **Organización (Ajustes > Organización):** eliges cómo llevas tus tareas (`organize` en `config.json`):
+  **Jira**, **Kaito Kanban** o **Lista de pendientes**. Sin Jira configurado, por defecto es Kaito Kanban: un
+  tablero local (`todos.json`, tareas `K-<n>`, mismos campos que el tablero de Linux) con cuatro columnas
+  (Por hacer, Haciendo, En revisión, Hecho). La sección del menú muestra las tareas abiertas; cada tarea se
+  abre en un panel de Kaito (estado, prioridad, descripción, **Mandar a Claude**) y se arrastra entre
+  columnas. En la captura rápida, la pestaña Jira pasa a ser **Kanban**.
 - **Ir a la terminal de un agente:** clic en la fila. En Terminal e iTerm2 se selecciona la pestaña exacta
   (por el `tty` del proceso); en Warp y otras se activa la app.
 - **Mandar a Claude:** abre una ventana de Terminal o una pestaña de iTerm2 (`terminal` en Ajustes: automática,

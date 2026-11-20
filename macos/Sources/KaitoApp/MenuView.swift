@@ -32,9 +32,14 @@ struct MenuView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         AgentsSection().tourZone("agents", tour)
                         if model.config.showUsage && !model.usage.isEmpty { UsageSection().tourZone("usage", tour) }
-                        if model.config.jiraEnabled { JiraSection().tourZone("board", tour) }
+                        switch model.config.organize {
+                        case "jira": JiraSection().tourZone("board", tour)
+                        case "kanban": KanbanSection().tourZone("board", tour)
+                        default: EmptyView()
+                        }
                         if model.config.tasksEnabled { TasksSection().tourZone("tasks", tour) }
-                        TodosSection().tourZone("todos", tour)
+                        // El tablero usa el mismo todos.json: con Kaito Kanban la lista de Pendientes sobra.
+                        if model.config.organize != "kanban" { TodosSection().tourZone("todos", tour) }
                         RemindersSection().tourZone("reminders", tour)
                         NotesSection().tourZone("notes", tour)
                     }

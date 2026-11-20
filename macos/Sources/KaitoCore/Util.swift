@@ -22,6 +22,7 @@ public struct KaitoPaths: Sendable {
     public var confDir: String { "\(configHome)/kaito" }
     public var configPath: String { "\(confDir)/config.json" }
     public var todosPath: String { "\(confDir)/todos.json" }
+    public var kanbanPath: String { "\(confDir)/kanban.json" } // {seq}: contador de ids K-<n>
     public var notesPath: String { "\(confDir)/notes.json" }
     public var remindersPath: String { "\(confDir)/reminders.json" }
     public var cacheDir: String { "\(cacheHome)/kaito" }

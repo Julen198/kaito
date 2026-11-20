@@ -27,6 +27,7 @@ public struct KaitoConfig: Sendable {
     public static let defaultJql = presets[0].jql!
     /// Terminales de macOS. 'auto': iTerm2 si está abierto; si no, Terminal.
     public static let terminals = ["auto", "terminal", "iterm", "warp"]
+    public static let organizeModes = ["jira", "kanban", "list"]
     public static let captureHotkeys = ["ctrl+alt+space", "ctrl+alt+k", "ctrl+shift+space", "cmd+shift+k", "off"]
     public static let repoRootCandidates = ["Documentos", "Documents", "dev", "code", "projects", "src", "Developer"]
 
@@ -36,6 +37,8 @@ public struct KaitoConfig: Sendable {
     public var refreshSeconds = 30
     public var jiraMax = 20
     public var jiraEnabled = true
+    /// Manera de organizarse: "jira", "kanban" (tablero local) o "list" (solo Pendientes).
+    public var organize = "kanban"
     public var jiraBaseUrl = ""
     public var jiraEmail = ""
     public var jiraJql = KaitoConfig.defaultJql
@@ -101,6 +104,15 @@ public struct KaitoConfig: Sendable {
         c.checkUpdates = raw["checkUpdates"]?.bool != false
         c.jiraBaseUrl = raw["jiraBaseUrl"]?.string ?? ""
         c.jiraEmail = raw["jiraEmail"]?.string ?? ""
+        // Sin `organize` guardado: Jira si está configurado; si se desactivó a mano, la lista; si no, el tablero local.
+        if let o = raw["organize"]?.string, organizeModes.contains(o) {
+            c.organize = o
+        } else if c.jiraEnabled && c.jiraConfigured {
+            c.organize = "jira"
+        } else {
+            c.organize = raw["jiraEnabled"]?.bool == false && raw["kanbanEnabled"]?.bool != true ? "list" : "kanban"
+        }
+        c.jiraEnabled = c.organize == "jira"
         c.terminal = terminals.contains(raw["terminal"]?.string ?? "") ? raw["terminal"]!.string! : "auto"
         c.captureHotkey = captureHotkeys.contains(raw["captureHotkey"]?.string ?? "") ? raw["captureHotkey"]!.string! : "ctrl+alt+space"
         if let v = raw["jiraView"]?.string, !v.isEmpty { c.jiraView = v }

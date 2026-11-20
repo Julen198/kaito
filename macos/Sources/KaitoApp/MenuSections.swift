@@ -98,7 +98,7 @@ struct TasksSection: View {
         VStack(alignment: .leading, spacing: 4) {
             SectionHeader(title: "Tareas programadas", count: list.count)
             if list.isEmpty {
-                EmptyRow(text: "Sin tareas: créalas en la captura rápida (pestaña Tarea)")
+                EmptyRow(text: "Sin tareas: créalas en la captura rápida (pestaña Tarea programada)")
             }
             ForEach(list) { t in
                 TaskRow(task: t)
