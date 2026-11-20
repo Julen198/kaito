@@ -8,7 +8,7 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {addNote, addReminder, collectRepos, readConfig, readJson, updateConfig, CONFIG_PATH} from './common.js';
-import {parseWhen, parseSchedule, nextRun, nextLabel} from './when.js';
+import {parseWhen, parseSchedule, nextRun, nextLabel, typewriterStep} from './when.js';
 import {
     TOOLS, TOOLS_LABEL, addTask, newTask, extractKey, suggestTools, taskName, resolveCwd,
 } from './tasks.js';
@@ -22,13 +22,22 @@ import {
 const WIDTH = 640;
 const TOP = 110;
 const MODES = [
-    {id: 'note', title: 'Nota', icon: 'document-edit-symbolic', hint: 'Escribe una nota'},
-    {id: 'reminder', title: 'Recordatorio', icon: 'alarm-symbolic',
-        hint: 'Qué y cuándo: «llamar a Iker en 20 min»'},
-    {id: 'jira', title: 'Jira', file: 'jira.svg',
-        hint: 'Qué pasa: «el chat de Nike en FR no carga los cupones, urgente»'},
-    {id: 'task', title: 'Tarea', icon: 'media-playlist-repeat-symbolic',
-        hint: 'Cuándo y qué: «cada lunes a las 9 revisa en BigQuery las ventas…»'},
+    {id: 'note', title: 'Nota', icon: 'document-edit-symbolic', examples: [
+        'idea: kanban por proyecto', 'apuntar el nº de pedido 48213',
+        'hablar con Ane del deploy del viernes', 'revisar los precios de la competencia']},
+    {id: 'reminder', title: 'Recordatorio', icon: 'alarm-symbolic', examples: [
+        'llamar a Iker en 20 min', 'revisar deploy el lunes a las 10',
+        'mañana a las 9 enviar informe', 'el viernes a las 13 comprar regalo']},
+    {id: 'jira', title: 'Jira', file: 'jira.svg', examples: [
+        'el chat de Nike en FR no carga los cupones, urgente',
+        'el buscador no devuelve resultados con tildes',
+        'la newsletter de ofertas llega con el enlace roto',
+        'error 500 al guardar el perfil en la app']},
+    {id: 'task', title: 'Tarea', icon: 'media-playlist-repeat-symbolic', examples: [
+        'cada lunes a las 9 revisa en BigQuery las ventas de la semana',
+        'de lunes a viernes a las 8 resume los errores de Sentry',
+        'todos los días a las 18 haz un resumen de los PRs abiertos',
+        'cada hora comprueba si hay tickets urgentes en Jira']},
 ];
 const TASK_NO_WHEN = 'Añade cuándo: «todos los lunes a las 9», «cada hora», «mañana a las 10»…';
 const REPO_CHOICES = 8;
@@ -114,7 +123,13 @@ export class CaptureModal {
 
         this._entry = new St.Entry({style_class: 'kaito-capture-entry', can_focus: true, x_expand: true});
         this._entry.clutter_text.connect('activate', () => this._save());
-        this._entry.clutter_text.connect('text-changed', () => this._updateFooter());
+        this._entry.clutter_text.connect('text-changed', () => {
+            this._updateFooter();
+            if (this._hintPaused && this._entry?.get_text() === '') {
+                this._hintPaused = false;
+                this._startHint();
+            }
+        });
         card.add_child(this._entry);
         card.add_child(this._buildFooter());
 
@@ -144,6 +159,7 @@ export class CaptureModal {
             GLib.source_remove(this._warnId);
             this._warnId = 0;
         }
+        this._stopHint();
         try {
             Main.popModal(this._grab);
         } catch (e) {
@@ -269,8 +285,45 @@ export class CaptureModal {
             else
                 this._tabs[m.id].remove_style_class_name('selected');
         }
-        this._entry.hint_text = MODES.find(m => m.id === this._mode).hint;
+        this._startHint();
         this._updateFooter();
+    }
+
+    _stopHint() {
+        if (this._hintId) {
+            GLib.source_remove(this._hintId);
+            this._hintId = 0;
+        }
+    }
+
+    /** Placeholder animado (máquina de escribir) con los ejemplos del modo; estático sin animaciones. */
+    _startHint() {
+        this._stopHint();
+        this._hintPaused = false;
+        const examples = MODES.find(m => m.id === this._mode).examples;
+        this._entry.hint_text = examples[0];
+        if (!St.Settings.get().enable_animations)
+            return;
+        this._hintState = {i: 0, n: 0, del: false};
+        this._entry.hint_text = '';
+        this._hintTick(examples);
+    }
+
+    _hintTick(examples) {
+        if (!this._entry)
+            return;
+        const r = typewriterStep(examples, this._hintState);
+        this._hintState = r.state;
+        this._entry.hint_text = r.text;
+        this._hintId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, r.delay, () => {
+            this._hintId = 0;
+            // Con texto escrito el hint no se ve: se pausa y se reanuda al vaciarse (_onTextChanged).
+            if (this._entry && this._entry.get_text() === '')
+                this._hintTick(examples);
+            else if (this._entry)
+                this._hintPaused = true;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _parsed() {

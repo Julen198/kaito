@@ -1,6 +1,6 @@
 // Ejecutar: node when.test.js
 import assert from 'node:assert/strict';
-import {parseWhen, shortLabel, parseRecurrence, parseSchedule, nextRun, ruleLabel, nextLabel} from './when.js';
+import {parseWhen, shortLabel, parseRecurrence, parseSchedule, nextRun, ruleLabel, nextLabel, typewriterStep} from './when.js';
 
 const now = new Date(2026, 10, 18, 13, 40, 0); // miércoles 18 nov 2026, 13:40
 const iso = d => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -113,5 +113,15 @@ if (new Date(2026, 2, 29, 12).getTimezoneOffset() !== new Date(2026, 2, 28, 12).
     console.log('when.test.js: cambio de hora comprobado');
 } else {
     console.log('when.test.js: zona sin cambio de hora (usa TZ=Europe/Madrid para probarlo)');
+}
+// typewriterStep: escribe, pausa, borra y pasa al siguiente ejemplo
+{
+    const texts = [];
+    let r = {state: undefined};
+    for (let k = 0; k < 8; k++) {
+        r = typewriterStep(['ab', 'c'], r.state);
+        texts.push(`${r.text}|${r.delay}`);
+    }
+    assert.deepEqual(texts, ['a|55', 'ab|1600', 'a|30', '|400', 'c|1600', '|400', 'a|55', 'ab|1600']);
 }
 console.log('when.test.js: OK');

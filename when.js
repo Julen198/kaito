@@ -343,3 +343,28 @@ export function nextLabel(date, now = new Date()) {
         return `mañana ${hhmm(date)}`;
     return diff > 0 && diff < 7 ? `${DAY_ABBR[date.getDay()]} ${hhmm(date)}` : `${DAY_ABBR[date.getDay()]} ${date.getDate()} ${hhmm(date)}`;
 }
+
+/**
+ * Puro. Un paso de la animación "máquina de escribir" del placeholder.
+ * state {i, n, del}: ejemplo, letras visibles, borrando. → {state, text, delay(ms)}
+ */
+export function typewriterStep(examples, state = {i: 0, n: 0, del: false}) {
+    let {i, n, del} = state;
+    const len = examples[i].length;
+    let delay;
+    if (!del) {
+        n = Math.min(n + 1, len);
+        delay = n >= len ? 1600 : 55;
+        if (n >= len)
+            del = true;
+    } else {
+        n = Math.max(n - 1, 0);
+        delay = 30;
+        if (n <= 0) {
+            del = false;
+            i = (i + 1) % examples.length;
+            delay = 400;
+        }
+    }
+    return {state: {i, n, del}, text: examples[state.i].slice(0, n), delay};
+}
