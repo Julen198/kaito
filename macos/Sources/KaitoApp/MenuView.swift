@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 struct MenuView: View {
     @EnvironmentObject var model: AppModel
+    @State private var contentHeight: CGFloat = 400
+    static let maxListHeight: CGFloat = 560
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,8 +37,10 @@ struct MenuView: View {
                     NotesSection()
                 }
                 .padding(12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
-            .frame(maxHeight: 560)
+            // Un ScrollView no tiene altura ideal: en la ventana del MenuBarExtra se colapsaba a cero.
+            .frame(height: min(contentHeight, Self.maxListHeight))
             if let f = model.flash {
                 Divider()
                 Text(f)

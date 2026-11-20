@@ -43,10 +43,23 @@ struct MenuBarLabel: View {
         let moon = model.quiet.quiet ? Text("  \(Image(systemName: "moon.fill"))") : Text("")
         let agentIcon = needs > 0 ? "exclamationmark.bubble.fill" : model.workingCount > 0 ? "sparkles" : "sparkle"
         let agentNum = needs > 0 ? needs : model.workingCount
-        if model.config.jiraEnabled {
-            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "ticket")) \(model.jiraCount)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
+        let text = model.config.jiraEnabled
+            ? Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "ticket")) \(model.jiraCount)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
+            : Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
+        // La barra de menús descarta los símbolos intercalados en un Text (se veía «0 0 0»):
+        // se dibuja a una imagen plantilla, que sí respeta.
+        if let image = Self.render(text) {
+            Image(nsImage: image)
         } else {
-            Text("\(Image(systemName: agentIcon)) \(agentNum)  \(Image(systemName: "checklist")) \(model.todoCount)") + moon
+            text
         }
+    }
+
+    static func render(_ text: Text) -> NSImage? {
+        let renderer = ImageRenderer(content: text.font(.system(size: 13, weight: .medium)))
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        let image = renderer.nsImage
+        image?.isTemplate = true
+        return image
     }
 }

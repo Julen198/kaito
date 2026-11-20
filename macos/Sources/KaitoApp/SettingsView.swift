@@ -44,26 +44,27 @@ struct SettingsView: View {
     static let dayLetters = ["L", "M", "X", "J", "V", "S", "D"] // lunes = 1 … domingo = 7
 
     var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            jira.tabItem { Label("Jira", systemImage: "ticket") }
-            agents.tabItem { Label("Agentes", systemImage: "sparkles") }
-            notices.tabItem { Label("Avisos", systemImage: "bell") }
-        }
-        .padding(16)
-        .frame(width: 520)
-        .onAppear {
-            load()
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .safeAreaInset(edge: .bottom) {
+        // Alto fijo y botón dentro del VStack: con safeAreaInset «Guardar» quedaba fuera de la ventana
+        // y los formularios (sin altura ideal) salían recortados.
+        VStack(spacing: 8) {
+            TabView {
+                general.tabItem { Label("General", systemImage: "gearshape") }
+                jira.tabItem { Label("Jira", systemImage: "ticket") }
+                agents.tabItem { Label("Agentes", systemImage: "sparkles") }
+                notices.tabItem { Label("Avisos", systemImage: "bell") }
+            }
             HStack {
                 if let status { Text(status).font(.callout).foregroundStyle(.secondary).lineLimit(2) }
                 Spacer()
                 Button("Guardar") { save() }
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(.top, 8)
+        }
+        .padding(16)
+        .frame(width: 560, height: 520)
+        .onAppear {
+            load()
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
