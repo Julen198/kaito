@@ -45,6 +45,7 @@ import {ReplyModal, CommentModal, TaskResultModal} from './reply.js';
 import {TaskScheduler, readTasks, patchTask, deleteTask, readLastRun, setEnabled, findingsComment} from './tasks.js';
 import {shortLabel, nextLabel} from './when.js';
 import {UpdateNotice} from './updates.js';
+import {attachTooltip} from './tooltip.js';
 
 const C = {live: '#5BC8AF', idle: '#9A9996', jira: '#78AEED', todo: '#F5C211', needs: '#FFA348'};
 const DONE_MSG = 'Terminó, esperando tu respuesta';
@@ -1609,6 +1610,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 }
             },
             side,
+            tip: () => ({title: i.summary, detail: ticketDetailLine(i, this._myId)}),
         };
         const out = [spec];
         if (as?.error && !as.busy) {
@@ -2132,12 +2134,12 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     _renderMenu(id, specs) {
         const s = this._sections[id];
         s.removeAll();
-        for (const {actor, activate, cls, side, keepOpen, reveal} of specs) {
+        for (const {actor, activate, cls, side, keepOpen, reveal, tip} of specs) {
             let item;
             if (side || keepOpen) {
                 // Botones hermanos (no anidados): el × o el envío no disparan la acción de la fila.
                 item = staticItem();
-                const main = this._rowButton(actor, activate, cls, !keepOpen);
+                const main = this._rowButton(actor, activate, cls, !keepOpen, tip);
                 if (id === 'jira')
                     main.connect('key-focus-in', () => ensureActorVisibleInScrollView(this._jiraScroll, main));
                 item.add_child(main);
@@ -2174,7 +2176,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     }
 
     /** Fila principal como St.Button; sin acción, contenedor plano. */
-    _rowButton(actor, activate, cls, closeMenu) {
+    _rowButton(actor, activate, cls, closeMenu, tip = null) {
         if (!activate) {
             const box = new St.BoxLayout({style_class: 'kaito-row-main', x_expand: true});
             box.add_child(actor);
@@ -2185,6 +2187,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             can_focus: true, track_hover: true, x_expand: true, x_align: Clutter.ActorAlign.FILL,
         });
         btn.set_child(actor);
+        if (tip)
+            attachTooltip(btn, tip);
         btn.connect('clicked', () => {
             if (closeMenu)
                 this.menu.close();
@@ -2196,10 +2200,10 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     _renderCard(id, specs) {
         const box = this._cardSec[id];
         box.destroy_all_children();
-        for (const {actor, activate, cls, side} of specs) {
+        for (const {actor, activate, cls, side, tip} of specs) {
             if (side) {
                 const row = new St.BoxLayout({style_class: 'kaito-row kaito-split', x_expand: true});
-                row.add_child(this._rowButton(actor, activate, cls, false));
+                row.add_child(this._rowButton(actor, activate, cls, false, tip));
                 for (const sb of [side].flat())
                     row.add_child(sb);
                 box.add_child(row);

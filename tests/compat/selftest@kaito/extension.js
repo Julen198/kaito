@@ -199,11 +199,39 @@ async function run() {
         }
         await wait(300);
         await screenshot('expand');
+        // Tooltip al pasar el ratón por una fila de Jira: aparece tras ~500 ms y se quita al salir.
+        const tips = () => Main.layoutManager.uiGroup.get_children().filter(a => a.has_style_class_name?.('kaito-tooltip'));
+        const rowBtns = [];
+        walk(ind._sections.jira.actor, a => {
+            if (a instanceof St.Button && a.has_style_class_name('kaito-row-main'))
+                rowBtns.push(a);
+        });
+        const rowBtn = rowBtns[ISSUES.length - 1]; // la de RUN-3, la visible con el detalle abierto
+        if (!rowBtn)
+            throw new Error('sin botón de fila de Jira');
+        rowBtn.set_hover(true);
+        await wait(250);
+        if (tips().length)
+            throw new Error('el tooltip salió antes de tiempo');
+        await wait(600);
+        if (tips().length !== 1 || !labels(tips()[0]).includes(ISSUES[ISSUES.length - 1].summary))
+            throw new Error(`tooltip ausente o sin resumen (${tips().length})`);
+        await wait(200);
+        await screenshot('tooltip');
+        rowBtn.set_hover(false);
+        await wait(100);
+        if (tips().length)
+            throw new Error('el tooltip sigue tras salir');
+        rowBtn.set_hover(true);
+        await wait(700);
         hid.forEach(a => a.show());
         const d = labels(ind.menu.box);
         if (!d.includes('Abrir en Jira') || !d.some(x => x.startsWith('High · ')))
             throw new Error('detalle del ticket sin pintar');
         ind.menu.close(false);
+        await wait(200);
+        if (tips().length)
+            throw new Error('el tooltip sigue con el menú cerrado');
         return `${t.length} etiquetas`;
     });
     await step('pinned-card', async () => {

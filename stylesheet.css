@@ -275,3 +275,8 @@
 .kaito-inbox-dnd-btn { padding: 4px 12px; border-radius: 8px; font-weight: bold; background-color: #3a3a3f; color: #ffffff; }
 .kaito-inbox-dnd-btn:hover, .kaito-inbox-dnd-btn:focus { background-color: #4a4a50; }
 .kaito-inbox-dnd-on { background-color: #78AEED; color: #0b1f36; }
+
+/* Tooltip flotante (fuera del menú: no depende del tema claro/oscuro del shell) */
+.kaito-tooltip { background-color: #1f1f22; color: #ffffff; border-radius: 8px; padding: 6px 10px; font-size: 13px; spacing: 2px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+.kaito-tooltip-title { color: #ffffff; font-size: 13px; }
+.kaito-tooltip-detail { color: rgba(255,255,255,0.6); font-size: 12px; }
