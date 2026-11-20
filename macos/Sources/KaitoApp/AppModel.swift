@@ -438,8 +438,10 @@ final class AppModel: ObservableObject {
         checkReminders()
     }
 
-    func snoozeReminder(_ id: String) {
-        try? data.snoozeReminder(id)
+    /// option nil = el botón principal (snoozeMinutes de la config).
+    func snoozeReminder(_ id: String, option: SnoozeOption? = nil) {
+        let o = option ?? .minutes(config.snoozeMinutes)
+        try? data.snoozeReminder(id, until: Snooze.until(o, now: Date()))
         refreshLocal()
         checkReminders()
     }

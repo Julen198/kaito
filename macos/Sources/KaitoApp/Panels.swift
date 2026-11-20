@@ -561,8 +561,10 @@ final class CapturePanelController {
 @MainActor
 struct ReminderCard: View {
     let reminders: [Reminder]
-    let onSnooze: (String) -> Void
+    let snoozeMinutes: Int
+    let onSnooze: (String, SnoozeOption?) -> Void
     let onDone: (String) -> Void
+    @State private var moreFor: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -575,9 +577,19 @@ struct ReminderCard: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
-                    Button("Posponer 10 min") { onSnooze(r.id) }
-                    Button("Hecho") { onDone(r.id) }
-                        .keyboardShortcut(.defaultAction)
+                    if moreFor == r.id {
+                        Button { moreFor = nil } label: { Image(systemName: "chevron.left") }
+                            .help("Volver").accessibilityLabel("Volver")
+                        ForEach(SnoozeOption.menu, id: \.label) { o in
+                            Button(o.label) { moreFor = nil; onSnooze(r.id, o) }
+                        }
+                    } else {
+                        Button("Posponer \(Snooze.label(snoozeMinutes))") { onSnooze(r.id, nil) }
+                        Button { moreFor = r.id } label: { Image(systemName: "chevron.down") }
+                            .help("Más opciones de posponer").accessibilityLabel("Más opciones de posponer")
+                        Button("Hecho") { onDone(r.id) }
+                            .keyboardShortcut(.defaultAction)
+                    }
                 }
             }
         }
@@ -611,7 +623,8 @@ final class ReminderPanelController {
         if ids == shownIds && panel?.isVisible == true { return }
         shownIds = ids
         let view = ReminderCard(reminders: due,
-                                onSnooze: { id in AppModel.shared.snoozeReminder(id) },
+                                snoozeMinutes: AppModel.shared.config.snoozeMinutes,
+                                onSnooze: { id, o in AppModel.shared.snoozeReminder(id, option: o) },
                                 onDone: { id in AppModel.shared.completeReminder(id) })
         if panel == nil {
             let p = makePanel(width: 520)

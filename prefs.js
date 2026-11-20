@@ -13,7 +13,7 @@ import {
     installedProviders,
 } from './common.js';
 import {LEVEL_TEXT} from './providers.js';
-import {parseHHMM, fmtHHMM} from './quiet.js';
+import {parseHHMM, fmtHHMM, SNOOZE_CHOICES, snoozeLabel} from './quiet.js';
 import {PANEL_RING_PROVIDERS, PANEL_RING_LABELS} from './usage.js';
 
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
@@ -493,6 +493,21 @@ export default class KaitoPreferences extends ExtensionPreferences {
         general.add(ringRow);
         general.add(switchRow('Resumen al empezar el día',
             'Primera vez a partir de las 06:00: tickets en curso, recordatorios de hoy y agentes parados', 'dailySummary', cfg));
+        const snIdx = Math.max(0, SNOOZE_CHOICES.indexOf(cfg.snoozeMinutes));
+        const snoozeRow = new Adw.ComboRow({
+            title: 'Posponer recordatorios',
+            subtitle: 'Duración del botón «Posponer» de la tarjeta (el chevron ofrece más opciones)',
+            model: Gtk.StringList.new(SNOOZE_CHOICES.map(snoozeLabel)),
+            selected: snIdx,
+        });
+        snoozeRow.connect('notify::selected', () => {
+            try {
+                updateConfig({snoozeMinutes: SNOOZE_CHOICES[snoozeRow.selected]});
+            } catch (e) {
+                console.error(`kaito: no se pudo guardar snoozeMinutes: ${e.message}`);
+            }
+        });
+        general.add(snoozeRow);
         general.add(this._shortcutRow());
         general.add(spinRow('Refrescar cada (segundos)', 'refreshSeconds', 10, 600, cfg));
         const term = new Adw.ComboRow({

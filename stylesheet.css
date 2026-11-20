@@ -78,6 +78,9 @@
 .kaito-reminder-btn { padding: 7px 14px; border-radius: 10px; font-weight: bold; }
 .kaito-reminder-btn.snooze { background-color: #45454a; color: #ffffff; }
 .kaito-reminder-btn.snooze:hover { background-color: #55555b; }
+.kaito-reminder-btn.kaito-snooze-more { padding: 7px 8px; }
+.kaito-snooze-options { spacing: 4px; }
+.kaito-reminder-btn.kaito-snooze-opt { padding: 7px 7px; }
 .kaito-reminder-btn.done { background-color: #F5C211; color: #241f00; }
 .kaito-reminder-btn.done:hover { background-color: #ffd23a; }
 

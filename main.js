@@ -37,7 +37,7 @@ import {inboxPush, inboxRoute, unreadCount, pendingNeeds, resolveItem} from './i
 import {QuietController} from './dnd.js';
 import {RING, MINI_RING, RING_TRACK, DIM_OPACITY, USAGE_COLUMNS, BADGE_ICONS, hexRgb, usageRows, panelRing} from './usage.js';
 import {PROVIDER_BY_ID} from './providers.js';
-import {quietLabel} from './quiet.js';
+import {quietLabel, snoozeLabel, snoozeUntil} from './quiet.js';
 import {findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
 import {fetchTransitions, applyTransition, pickTransition, REVIEW_RE, assignToMe, fetchMyself} from './jiradraft.js';
 import {ReminderManager} from './reminders.js';
@@ -56,7 +56,6 @@ const JIRA_MAX_H = 320; // alto máximo (px lógicos) de la lista de tickets
 const SHORTCUT_KEY = 'capture-shortcut';
 const KANBAN_KEY = 'kanban-shortcut'; // clave nueva del esquema (0.5.0): sin volver a entrar puede no existir aún
 const STATE_PILL = {todo: 'kaito-pill-new', doing: 'kaito-pill-doing', review: 'kaito-pill-review', done: 'kaito-pill-done'};
-const SNOOZE_MS = 10 * 60 * 1000;
 const PILL = {new: 'kaito-pill-new', indeterminate: 'kaito-pill-progress', done: 'kaito-pill-done'};
 const PICK_MAX = 12;
 const PICK_PILL = {issue: 'este ticket', match: 'coincide', project: 'último'};
@@ -2609,6 +2608,7 @@ export default class KaitoMain {
         this._reminders = new ReminderManager(() => this._indicator?.refreshLocal(), {
             quiet: () => this.quiet && {quiet: this.quiet.quiet, holdReminders: this.quiet.holdReminders},
             onDue: list => this._remindersDue(list),
+            snoozeMinutes: () => readConfig().snoozeMinutes,
         });
 
         this._taskTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TASK_TICK_S, () => {
@@ -2860,7 +2860,7 @@ export default class KaitoMain {
                     if (action.type === 'reminderDone') {
                         r.done = true;
                     } else {
-                        r.due = new Date(Date.now() + SNOOZE_MS).toISOString();
+                        r.due = snoozeUntil(readConfig().snoozeMinutes, new Date()).toISOString();
                         r.snoozes = (r.snoozes ?? 0) + 1;
                     }
                 });
@@ -2891,7 +2891,7 @@ export default class KaitoMain {
         for (const r of list) {
             this.inboxAdd({
                 id: `rem:${r.id}:${r.due}`, kind: 'reminder', title: r.text, body: '',
-                actions: [{label: 'Posponer 10 min', action: {type: 'reminderSnooze', id: r.id}},
+                actions: [{label: `Posponer ${snoozeLabel(readConfig().snoozeMinutes)}`, action: {type: 'reminderSnooze', id: r.id}},
                     {label: 'Hecho', action: {type: 'reminderDone', id: r.id}}],
             }, true);
         }

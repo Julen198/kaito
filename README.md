@@ -478,7 +478,8 @@ defecto, `codex` o `none`). Se desactiva en Ajustes > General (`showUsage`). Ló
 - Notas en `~/.config/kaito/notes.json`; recordatorios en `~/.config/kaito/reminders.json`.
   Clic en una nota del menú la copia al portapapeles.
 - Cada 20 s (y al activar la extensión) se buscan recordatorios vencidos; salen como tarjeta no modal
-  con "Posponer 10 min" y "Hecho".
+  con "Posponer 10 min" y "Hecho". La duración del botón es `snoozeMinutes` (5, 10, 15, 30 o 60; Ajustes →
+  «Posponer recordatorios»); el chevron de al lado ofrece 15 min, 30 min, 1 h, 3 h y «Mañana 9:00».
 
 ## Tareas programadas
 

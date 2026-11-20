@@ -6,7 +6,7 @@ import Secret from 'gi://Secret';
 import Soup from 'gi://Soup?version=3.0';
 
 import {parseTail, ticketFromHead} from './agents.js';
-import {normalizeWorkHours} from './quiet.js';
+import {normalizeWorkHours, snoozeMinutesOr} from './quiet.js';
 import {gitInstructions, migrateTodos, newTask} from './board.js';
 import {normalizeInbox} from './inbox.js';
 import {USAGE_COLORS, usageColor, formatReset, opencodeProvider, normalizePanelProvider} from './usage.js';
@@ -129,6 +129,7 @@ export function readConfig() {
     cfg.autoReview = raw.autoReview !== false;
     const rm = Number(raw.reviewReminderMinutes);
     cfg.reviewReminderMinutes = Number.isFinite(rm) && rm >= 0 ? Math.round(rm) : 30;
+    cfg.snoozeMinutes = snoozeMinutesOr(raw.snoozeMinutes);
     cfg.dailySummary = raw.dailySummary !== false;
     cfg.pinned = raw.pinned === true;
     cfg.showUsage = raw.showUsage !== false;

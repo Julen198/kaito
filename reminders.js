@@ -6,9 +6,9 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {readReminders, patchReminder} from './common.js';
+import {SNOOZE_OPTIONS, snoozeLabel, snoozeOptionLabel, snoozeUntil} from './quiet.js';
 
 const CHECK_SECONDS = 20;
-const SNOOZE_MS = 10 * 60 * 1000;
 const MAX_VISIBLE = 3;
 const WIDTH = 480;
 const TOP = 70;
@@ -22,12 +22,13 @@ const QUEUED_SHOWN = 12;
 export class ReminderManager {
     /**
      * @param {() => void} onChange se llama tras posponer o completar
-     * @param {{quiet?: () => ({quiet: boolean, holdReminders: boolean}|null), onDue?: (list) => void}} opts quiet: estado
+     * @param {{quiet?: () => ({quiet: boolean, holdReminders: boolean}|null), onDue?: (list) => void, snoozeMinutes?: () => number}} opts quiet: estado
      *   de No molestar (sin sonido; con holdReminders los recordatorios esperan a que termine); onDue: todos los vencidos
      */
     constructor(onChange, opts = {}) {
         this._onChange = onChange;
         this._quiet = opts.quiet ?? (() => null);
+        this._snoozeMinutes = opts.snoozeMinutes ?? (() => 10); // minutos del botón principal (config)
         this._onDue = opts.onDue ?? null; // panel de avisos: recibe los vencidos (también los retenidos)
         this._cards = new Map(); // id -> actor
         this._box = null;
@@ -120,16 +121,47 @@ export class ReminderManager {
         col.add_child(title);
 
         const buttons = new St.BoxLayout({style_class: 'kaito-reminder-buttons', x_align: Clutter.ActorAlign.END});
-        const snooze = new St.Button({style_class: 'kaito-reminder-btn snooze', label: 'Posponer 10 min', can_focus: true});
+        const snooze = new St.Button({style_class: 'kaito-reminder-btn snooze',
+            label: `Posponer ${snoozeLabel(this._snoozeMinutes())}`, can_focus: true});
+        const more = new St.Button({
+            style_class: 'kaito-reminder-btn snooze kaito-snooze-more', can_focus: true,
+            accessible_name: 'Más opciones de posponer',
+            child: new St.Icon({icon_name: 'pan-down-symbolic', icon_size: 16}),
+        });
         const done = new St.Button({style_class: 'kaito-reminder-btn done', label: 'Hecho', can_focus: true});
-        snooze.connect('clicked', () => this._act(r.id, x => {
-            x.due = new Date(Date.now() + SNOOZE_MS).toISOString();
-            x.snoozes = (x.snoozes ?? 0) + 1;
-        }));
+        snooze.connect('clicked', () => this._snooze(r.id, this._snoozeMinutes()));
         done.connect('clicked', () => this._act(r.id, x => { x.done = true; }));
         buttons.add_child(snooze);
+        buttons.add_child(more);
         buttons.add_child(done);
+
+        // Opciones de posponer: sustituyen a la fila de botones (se alternan con visible, sin destruir nada).
+        const options = new St.BoxLayout({style_class: 'kaito-reminder-buttons kaito-snooze-options',
+            x_align: Clutter.ActorAlign.END, visible: false});
+        const back = new St.Button({
+            style_class: 'kaito-reminder-btn snooze kaito-snooze-more', can_focus: true,
+            accessible_name: 'Volver',
+            child: new St.Icon({icon_name: 'go-previous-symbolic', icon_size: 16}),
+        });
+        options.add_child(back);
+        for (const o of SNOOZE_OPTIONS) {
+            const b = new St.Button({style_class: 'kaito-reminder-btn snooze kaito-snooze-opt',
+                label: snoozeOptionLabel(o), can_focus: true});
+            b.connect('clicked', () => this._snooze(r.id, o));
+            options.add_child(b);
+        }
+        more.connect('clicked', () => {
+            buttons.hide();
+            options.show();
+            options.get_child_at_index(1)?.grab_key_focus();
+        });
+        back.connect('clicked', () => {
+            options.hide();
+            buttons.show();
+            more.grab_key_focus();
+        });
         col.add_child(buttons);
+        col.add_child(options);
         card.add_child(col);
 
         this._cards.set(r.id, card);
@@ -326,6 +358,15 @@ export class ReminderManager {
         card.add_child(col);
         this._cards.set(QUEUED_ID, card);
         this._box.insert_child_at_index(card, 0);
+    }
+
+    /** Pospone un recordatorio: option = minutos o 'tomorrow' (ver snoozeUntil). */
+    _snooze(id, option) {
+        const due = snoozeUntil(option, new Date()).toISOString();
+        this._act(id, x => {
+            x.due = due;
+            x.snoozes = (x.snoozes ?? 0) + 1;
+        });
     }
 
     _act(id, fn) {

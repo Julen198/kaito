@@ -125,3 +125,52 @@ final class QuietTests: XCTestCase {
         XCTAssertTrue(c.workHours.enabled)
     }
 }
+
+/// Mismos casos que la sección 0.5.3 de kaito.test.js (snoozeUntil), con Europe/Madrid.
+final class SnoozeTests: XCTestCase {
+    var cal: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "Europe/Madrid")!
+        return c
+    }()
+
+    func D(_ y: Int, _ mo: Int, _ d: Int, _ h: Int = 0, _ mi: Int = 0) -> Date {
+        cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+    }
+
+    func until(_ o: SnoozeOption, _ now: Date) -> Date { Snooze.until(o, now: now, calendar: cal) }
+
+    func testMinutes() {
+        let now = D(2026, 11, 20, 10, 15)
+        XCTAssertEqual(until(.minutes(10), now), now.addingTimeInterval(600))
+        XCTAssertEqual(until(.minutes(60), now), now.addingTimeInterval(3600))
+        XCTAssertEqual(until(.minutes(180), now), now.addingTimeInterval(10800))
+        // 1 h desde las 01:30 del cambio de hora (29-mar-2026) = 3600 s reales
+        let dst = D(2026, 3, 29, 1, 30)
+        XCTAssertEqual(until(.minutes(60), dst).timeIntervalSince(dst), 3600)
+    }
+
+    func testTomorrow() {
+        XCTAssertEqual(until(.tomorrow, D(2026, 11, 20, 10, 15)), D(2026, 11, 21, 9))
+        XCTAssertEqual(until(.tomorrow, D(2026, 11, 20, 23, 59)), D(2026, 11, 21, 9))
+        XCTAssertEqual(until(.tomorrow, D(2026, 11, 20, 6, 0)), D(2026, 11, 21, 9))
+        XCTAssertEqual(until(.tomorrow, D(2026, 11, 20, 5, 59)), D(2026, 11, 20, 9))
+        XCTAssertEqual(until(.tomorrow, D(2026, 11, 20, 0, 0)), D(2026, 11, 20, 9))
+        XCTAssertEqual(until(.tomorrow, D(2026, 12, 31, 12)), D(2027, 1, 1, 9))
+        XCTAssertEqual(until(.tomorrow, D(2028, 2, 28, 12)), D(2028, 2, 29, 9))
+        // Días de cambio de hora: siguen siendo las 09:00 locales
+        for (y, mo, d) in [(2026, 3, 28), (2026, 3, 29), (2026, 10, 24), (2026, 10, 25)] {
+            XCTAssertEqual(until(.tomorrow, D(y, mo, d, 12)), D(y, mo, d + 1, 9))
+            XCTAssertEqual(until(.tomorrow, D(y, mo, d, 4)), D(y, mo, d, 9))
+        }
+    }
+
+    func testLabelsAndConfig() {
+        XCTAssertEqual([10, 60, 180].map(Snooze.label), ["10 min", "1 h", "3 h"])
+        XCTAssertEqual(SnoozeOption.menu.map(\.label), ["15 min", "30 min", "1 h", "3 h", "Mañana 9:00"])
+        XCTAssertEqual([15, 7, 0, 30].map { Snooze.minutesOr(Double($0)) }, [15, 10, 10, 30])
+        XCTAssertEqual(Snooze.minutesOr(nil), 10)
+        XCTAssertEqual(KaitoConfig.from(["snoozeMinutes": 60], home: "/h", isDir: { _ in false }).snoozeMinutes, 60)
+        XCTAssertEqual(KaitoConfig.from(nil, home: "/h", isDir: { _ in false }).snoozeMinutes, 10)
+    }
+}

@@ -60,6 +60,7 @@ public struct KaitoConfig: Sendable {
     public var autoReview = true
     public var reviewReminderMinutes = 30
     public var dailySummary = true
+    public var snoozeMinutes = 10 // 5, 10, 15, 30 o 60
     public var showUsage = true
     public var tasksEnabled = true
     public var workHours = WorkHours.default
@@ -119,6 +120,7 @@ public struct KaitoConfig: Sendable {
         c.autoReview = raw["autoReview"]?.bool != false
         if let rm = raw["reviewReminderMinutes"]?.number, rm.isFinite, rm >= 0 { c.reviewReminderMinutes = Int(rm.rounded()) }
         c.dailySummary = raw["dailySummary"]?.bool != false
+        c.snoozeMinutes = Snooze.minutesOr(raw["snoozeMinutes"]?.number)
         c.showUsage = raw["showUsage"]?.bool != false
         c.tasksEnabled = raw["tasksEnabled"]?.bool != false
         c.workHours = WorkHours.normalize(raw["workHours"])

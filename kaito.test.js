@@ -17,7 +17,7 @@ import {
 } from './common.js';
 import {localTaskPrompt} from './board.js';
 import {inboxPush} from './inbox.js';
-import {queuePush} from './quiet.js';
+import {queuePush, snoozeUntil, snoozeLabel, snoozeOptionLabel, snoozeMinutesOr, SNOOZE_CHOICES} from './quiet.js';
 import {parseRemote, prUrl, parseLog, markOnce, finishKey, finishLines, reviewReminderText, detectWork,
     pathsFromTranscript, dirsFromPaths, ticketBranches, findTicketWork} from './finish.js';
 import {parseTail, ticketFromHead, firstLine} from './agents.js';
@@ -668,5 +668,36 @@ eq(ticketDetailLine({priority: {name: 'High'}, status: 'En curso', issuetype: 'B
     'High · En curso · Bug · Ana B.', 'línea de detalle con responsable ajeno');
 eq(ticketDetailLine({status: 'En curso', assignee: {accountId: 'a', displayName: 'Ana B'}}, 'a'), 'En curso', 'sin responsable propio');
 eq(mapSearchIssue({key: 'R-1', fields: {issuetype: {name: 'Task'}}}).issuetype, 'Task', 'mapSearchIssue issuetype');
+
+// 0.5.3: posponer recordatorios.
+{
+    const L = (y, mo, d, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi, 0, 0);
+    const iso = d => d.toISOString();
+    const now = L(2026, 11, 20, 10, 15);
+    eq(iso(snoozeUntil(10, now)), iso(new Date(now.getTime() + 600000)), '10 min');
+    eq(iso(snoozeUntil(60, now)), iso(new Date(now.getTime() + 3600000)), '1 h');
+    eq(iso(snoozeUntil(180, now)), iso(new Date(now.getTime() + 3 * 3600000)), '3 h');
+    eq(iso(snoozeUntil('tomorrow', now)), iso(L(2026, 11, 21, 9)), 'mañana 9:00');
+    eq(iso(snoozeUntil('tomorrow', L(2026, 11, 20, 23, 59))), iso(L(2026, 11, 21, 9)), 'mañana desde las 23:59');
+    eq(iso(snoozeUntil('tomorrow', L(2026, 11, 20, 6, 0))), iso(L(2026, 11, 21, 9)), 'a las 06:00 ya es mañana');
+    eq(iso(snoozeUntil('tomorrow', L(2026, 11, 20, 5, 59))), iso(L(2026, 11, 20, 9)), 'antes de las 06:00: hoy 9:00');
+    eq(iso(snoozeUntil('tomorrow', L(2026, 11, 20, 0, 0))), iso(L(2026, 11, 20, 9)), 'medianoche: hoy 9:00');
+    eq(iso(snoozeUntil('tomorrow', L(2026, 12, 31, 12))), iso(L(2027, 1, 1, 9)), 'mañana cruza el año');
+    eq(iso(snoozeUntil('tomorrow', L(2028, 2, 28, 12))), iso(L(2028, 2, 29, 9)), 'mañana: 29 de febrero');
+    // Día de cambio de hora (Europe/Madrid: 29-mar-2026 02:00→03:00 y 25-oct-2026 03:00→02:00). Con otra zona solo
+    // comprueba que las 9:00 locales siguen siendo las 9:00.
+    for (const [y, mo, d] of [[2026, 3, 28], [2026, 3, 29], [2026, 10, 24], [2026, 10, 25]]) {
+        const u = snoozeUntil('tomorrow', L(y, mo, d, 12));
+        eq([u.getHours(), u.getMinutes(), u.getDate()], [9, 0, new Date(y, mo - 1, d + 1).getDate()], `mañana 9:00 local (${y}-${mo}-${d})`);
+        const early = snoozeUntil('tomorrow', L(y, mo, d, 4));
+        eq([early.getHours(), early.getDate()], [9, d], `hoy 9:00 local (${y}-${mo}-${d} 04:00)`);
+    }
+    // Los minutos son tiempo real: 1 h desde las 01:30 del cambio de hora = 60 min transcurridos.
+    const dst = L(2026, 3, 29, 1, 30);
+    eq(snoozeUntil(60, dst).getTime() - dst.getTime(), 3600000, '1 h son 3600 s también en el cambio de hora');
+    eq(SNOOZE_CHOICES, [5, 10, 15, 30, 60], 'opciones del botón principal');
+    eq([snoozeMinutesOr(15), snoozeMinutesOr(7), snoozeMinutesOr(undefined), snoozeMinutesOr('30'), snoozeMinutesOr(0)], [15, 10, 10, 30, 10], 'snoozeMinutes saneado');
+    eq([snoozeLabel(10), snoozeLabel(60), snoozeLabel(180), snoozeOptionLabel('tomorrow'), snoozeOptionLabel(15)], ['10 min', '1 h', '3 h', 'Mañana 9:00', '15 min'], 'etiquetas');
+}
 
 print(`kaito.test.js: ${n} comprobaciones OK`);

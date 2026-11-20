@@ -87,6 +87,25 @@ export function isQuiet(now, cfg = {}) {
     return {quiet: false, reason: null, until: null};
 }
 
+/** Valores permitidos de `snoozeMinutes` (config) y sus textos. */
+export const SNOOZE_CHOICES = [5, 10, 15, 30, 60];
+export const snoozeMinutesOr = v => SNOOZE_CHOICES.includes(Number(v)) ? Number(v) : 10;
+/** 10 → "10 min", 60 → "1 h", 180 → "3 h". */
+export const snoozeLabel = min => min % 60 === 0 ? `${min / 60} h` : `${min} min`;
+/** Opciones del chevron de la tarjeta: minutos (número) o 'tomorrow'. */
+export const SNOOZE_OPTIONS = [15, 30, 60, 180, 'tomorrow'];
+export const snoozeOptionLabel = o => o === 'tomorrow' ? 'Mañana 9:00' : snoozeLabel(o);
+
+/**
+ * Hasta cuándo posponer. option: minutos (tiempo transcurrido real, no se altera por el cambio de hora)
+ * o 'tomorrow' = las 09:00 locales del día siguiente (si ahora son menos de las 06:00, las de hoy).
+ */
+export function snoozeUntil(option, now) {
+    if (option === 'tomorrow')
+        return atLocal(now, now.getHours() < 6 ? 0 : 1, 9 * 60);
+    return new Date(now.getTime() + Number(option) * 60000);
+}
+
 /** "las 18:30" (hoy), "mañana 09:00", "lun 09:00". */
 export function whenLabel(d, now) {
     const hm = fmtHHMM(d.getHours() * 60 + d.getMinutes());

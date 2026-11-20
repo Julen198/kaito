@@ -271,6 +271,41 @@ async function run() {
             throw new Error(`solo ${n} tarjetas`);
         return `${n} tarjetas`;
     });
+    await step('reminder-snooze-options', async () => {
+        const r = m._reminders;
+        const REM = GLib.build_filenamev([GLib.get_user_config_dir(), 'kaito', 'reminders.json']);
+        const t0 = Date.now();
+        GLib.mkdir_with_parents(GLib.path_get_dirname(REM), 0o755);
+        GLib.file_set_contents(REM, JSON.stringify([{id: 'rs1', text: 'Probar posponer', due: new Date(t0 - 1000).toISOString(), done: false, snoozes: 1}]));
+        r._addCard({id: 'rs1', text: 'Probar posponer', due: new Date(t0 - 1000).toISOString(), snoozes: 1});
+        await wait(300);
+        const card = r._cards.get('rs1');
+        if (!labels(card).includes('Recordatorio · pospuesto 1 vez'))
+            throw new Error(`meta inesperada: ${labels(card)}`);
+        if (!labels(card).includes('Posponer 10 min'))
+            throw new Error(`botón principal inesperado: ${labels(card)}`);
+        const more = findButton(card, b => b.accessible_name === 'Más opciones de posponer');
+        if (!more)
+            throw new Error('sin chevron «Más opciones de posponer»');
+        more.emit('clicked', 0);
+        await wait(300);
+        const opt = findButton(card, b => b.label === '1 h');
+        if (!opt || !opt.mapped)
+            throw new Error('las opciones no se ven tras pulsar el chevron');
+        for (const l of ['15 min', '30 min', '3 h', 'Mañana 9:00'])
+            if (!labels(card).includes(l))
+                throw new Error(`falta la opción ${l}`);
+        await screenshot('snooze');
+        opt.emit('clicked', 0);
+        await wait(500);
+        if (r._cards.has('rs1'))
+            throw new Error('la tarjeta no se cerró');
+        const rem = readJsonFile(REM, [])[0];
+        const dt = new Date(rem.due).getTime() - t0;
+        if (Math.abs(dt - 3600000) > 15000 || rem.snoozes !== 2)
+            throw new Error(`due +${dt} ms, snoozes ${rem.snoozes}`);
+        return `1 h: due +${Math.round(dt / 60000)} min, snoozes ${rem.snoozes}`;
+    });
     await step('notification', async () => {
         const n = ind._notify('kaito te necesita', '¿Permitir?', {activate: () => {}, actions: [['Responder', () => {}], ['Ir a la terminal', () => {}]]});
         await wait(500);

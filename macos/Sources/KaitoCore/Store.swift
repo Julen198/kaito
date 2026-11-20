@@ -137,6 +137,14 @@ public struct DataStore: Sendable {
         }
     }
 
+    /// Pospone hasta `until` (opciones largas de la tarjeta) y cuenta una vez más.
+    public func snoozeReminder(_ id: String, until: Date) throws {
+        try patchReminder(id) { o in
+            o["due"] = .string(ISODate.string(until))
+            o["snoozes"] = .number(Double((o["snoozes"]?.int ?? 0) + 1))
+        }
+    }
+
     public func completeReminder(_ id: String) throws {
         try patchReminder(id) { $0["done"] = true }
     }

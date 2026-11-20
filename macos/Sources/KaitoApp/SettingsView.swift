@@ -33,6 +33,7 @@ struct SettingsView: View {
     @State private var autoReview = true
     @State private var reviewReminderMinutes = 30
     @State private var dailySummary = true
+    @State private var snoozeMinutes = 10
     @State private var showUsage = true
     @State private var tasksEnabled = true
     @State private var whEnabled = false
@@ -145,6 +146,9 @@ struct SettingsView: View {
                 Toggle("Ticket terminado con commits: moverlo a revisión y tarjeta «listo»", isOn: $autoReview)
                 Stepper(reviewReminderMinutes == 0 ? "Sin recordatorio de revisión" : "Recordar revisarlo a los \(reviewReminderMinutes) min",
                         value: $reviewReminderMinutes, in: 0...240, step: 5)
+                Picker("Posponer recordatorios", selection: $snoozeMinutes) {
+                    ForEach(Snooze.choices, id: \.self) { Text(Snooze.label($0)).tag($0) }
+                }
                 Toggle("Resumen del día (a partir de las 06:00)", isOn: $dailySummary)
                 Toggle("Tareas programadas", isOn: $tasksEnabled)
             }
@@ -224,6 +228,7 @@ struct SettingsView: View {
         autoReview = c.autoReview
         reviewReminderMinutes = c.reviewReminderMinutes
         dailySummary = c.dailySummary
+        snoozeMinutes = c.snoozeMinutes
         showUsage = c.showUsage
         tasksEnabled = c.tasksEnabled
         whEnabled = c.workHours.enabled
@@ -259,6 +264,7 @@ struct SettingsView: View {
             "autoReview": .bool(autoReview),
             "reviewReminderMinutes": .number(Double(reviewReminderMinutes)),
             "dailySummary": .bool(dailySummary),
+            "snoozeMinutes": .number(Double(snoozeMinutes)),
             "showUsage": .bool(showUsage),
             "tasksEnabled": .bool(tasksEnabled),
             "dndSilenceReminders": .bool(dndSilenceReminders),
