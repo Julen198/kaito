@@ -89,6 +89,9 @@ function patchConfig(patch) {
 const ISSUES = [
     {key: 'RUN-1', summary: 'Arreglar el login', status: 'Por hacer', category: 'new', priority: 'high'},
     {key: 'RUN-2', summary: 'Cupones FR', status: 'En curso', category: 'indeterminate', priority: 'low'},
+    {key: 'RUN-3', summary: 'Bender permite probar la integración de pagos con cupones de varios países a la vez y mostrar un error claro', status: 'Probando en desarrollo', category: 'indeterminate',
+        priority: {name: 'High'}, issuetype: 'Bug', assignee: {accountId: 'x', displayName: 'Ana Belén Ruiz'},
+        text: 'Primera línea de la descripción.\n\nSegunda línea con más detalle sobre el problema.\n- punto a\n- punto b\n- punto c'},
 ];
 const TASK = {id: 't1', name: 'Revisar ventas', key: 'RUN-1', cwd: '/tmp', enabled: true, lastOk: true, prompt: 'x'};
 const RUN = {ok: true, summary: 'Todo bien', text: 'Ventas **estables**.\n\n```sql\nSELECT 1\n```', ts: new Date().toISOString()};
@@ -180,8 +183,26 @@ async function run() {
         for (const want of ['RUN-1', 'Arreglar el login', 'Te necesita', 'web', 'Revisar ventas', 'Codex', 'Gemini', 'api', 'abierto'])
             if (!t.includes(want))
                 throw new Error(`falta «${want}» en el menú`);
-        ind._toggleExpand?.(ISSUES[0]);
+        ind._toggleExpand?.(ISSUES[2]);
+        await wait(500);
+        // Pantalla de 800 px: se oculta lo demás para que la lista de Jira tenga sitio en la captura.
+        const hid = [];
+        for (const id of Object.keys(ind._sections)) {
+            if (id === 'jira')
+                continue;
+            for (const a of [ind._sections[id].actor, ind._headers[id]]) {
+                if (a?.visible) {
+                    a.hide();
+                    hid.push(a);
+                }
+            }
+        }
         await wait(300);
+        await screenshot('expand');
+        hid.forEach(a => a.show());
+        const d = labels(ind.menu.box);
+        if (!d.includes('Abrir en Jira') || !d.some(x => x.startsWith('High · ')))
+            throw new Error('detalle del ticket sin pintar');
         ind.menu.close(false);
         return `${t.length} etiquetas`;
     });

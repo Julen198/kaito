@@ -9,7 +9,7 @@ import {
     usageColor, toEpochS, parseClaudeUsage, parseCodexLine, lastCodexUsage, pickWindows, applyStaleness, formatReset,
     usageLabel, ageLabel, usageView, readCodexUsage, readClaudeUsage,
     canDecide, agentsByTicket, shouldShowDaily, dailySummaryLines, localDay, warpTabToml, sortIssues, statusGroup,
-    viewJql, visibleViews, normalizeCustomViews, projectsFromIssues, shortName, mapSearchIssue, RECENT_JQL,
+    viewJql, visibleViews, normalizeCustomViews, projectsFromIssues, shortName, mapSearchIssue, descriptionSnippet, ticketDetailLine, RECENT_JQL,
     terminalMigration, resolveTerminal, gnomeTerminalArgv, kgxArgv, ptyxisExportsTab, terminalFocusLevel,
     terminalFocusTarget, parseEnviron, TERMINALS, parseUpdateMarker, firstErrorLine, parseCheck, changelogBody,
     readConfig, updateConfig, readQuietQueue, writeQuietQueue, readUpdateState, writeUpdateState, CONFIG_PATH, CLAUDE_PROJECTS,
@@ -656,5 +656,17 @@ if (GLib.get_user_config_dir().startsWith('/tmp') || CONFIG_PATH.includes('/scra
     for (const [a, b] of [['gembiratech', 'https://gembiratech.atlassian.net'], [' gembiratech.atlassian.net/ ', 'https://gembiratech.atlassian.net'], ['https://x.atlassian.net/', 'https://x.atlassian.net'], ['', '']])
         if (nj(a) !== b) throw new Error(`normalizeJiraUrl(${a}) = ${nj(a)}`);
 }
+
+
+// 0.5.1: detalle del ticket desplegado.
+eq(descriptionSnippet(''), '', 'snippet vacío');
+eq(descriptionSnippet(null), '', 'snippet null');
+eq(descriptionSnippet('a\n\n  b  \nc'), 'a\nb\nc', 'snippet quita líneas vacías');
+eq(descriptionSnippet('1\n2\n3\n4\n5'), '1\n2\n3\n4…', 'snippet 4 líneas');
+eq(descriptionSnippet('x'.repeat(400)), `${'x'.repeat(300)}…`, 'snippet 300 caracteres');
+eq(ticketDetailLine({priority: {name: 'High'}, status: 'En curso', issuetype: 'Bug', assignee: {accountId: 'a', displayName: 'Ana Belén Ruiz'}}, 'b'),
+    'High · En curso · Bug · Ana B.', 'línea de detalle con responsable ajeno');
+eq(ticketDetailLine({status: 'En curso', assignee: {accountId: 'a', displayName: 'Ana B'}}, 'a'), 'En curso', 'sin responsable propio');
+eq(mapSearchIssue({key: 'R-1', fields: {issuetype: {name: 'Task'}}}).issuetype, 'Task', 'mapSearchIssue issuetype');
 
 print(`kaito.test.js: ${n} comprobaciones OK`);

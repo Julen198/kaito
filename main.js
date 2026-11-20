@@ -24,7 +24,7 @@ import {
     collectRepos, scanRepos, filterRepos, rankRepos, fetchIssueDescription, sendIssueToClaude, priorityKind, projectOf,
     agentsByTicket, dailySummaryLines, shouldShowDaily, readDailyDay, writeDailyDay, localDay, addReminder,
     CLAUDE_USAGE_PATH, readClaudeUsage, readCodexUsage, usageView, readOpencodeProvider,
-    fetchJiraJql, visibleViews, viewJql, projectsFromIssues, resolveProjects, shortName, migrateTerminalOnce,
+    fetchJiraJql, visibleViews, viewJql, projectsFromIssues, resolveProjects, shortName, descriptionSnippet, ticketDetailLine, migrateTerminalOnce,
     processChain, terminalFocusTarget, cancelPendingUris,
     installedProviders, collectOtherAgents, changelogBody, readUpdateState, writeUpdateState,
     readBoard, readTodos, patchBoardTask, addBoardTask, OPEN_KANBAN_PATH, INBOX_PATH, readInbox, writeInbox,
@@ -105,6 +105,13 @@ function ellipsized(label) {
     label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
     label.x_expand = true;
     return label;
+}
+
+/** Pastilla de estado: ancho máximo por CSS y «…» al recortar, para que el resumen conserve el sitio. */
+function pillLabel(text, cls) {
+    const l = mkLabel(text, `kaito-pill ${cls}`);
+    l.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+    return l;
 }
 
 function dot(color) {
@@ -1563,7 +1570,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         if (view === 'sprint')
             row.add_child(mkLabel(shortName(i.assignee?.displayName) || 'Sin asignar', 'kaito-muted kaito-assignee'));
         if (!agent)
-            row.add_child(mkLabel(i.status, `kaito-pill ${PILL[i.category] ?? PILL.new}`));
+            row.add_child(pillLabel(i.status, PILL[i.category] ?? PILL.new));
         const side = [];
         if (agent) {
             // En vez del estado: el agente que trabaja en el ticket; clic = su terminal.
@@ -1582,7 +1589,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 () => this._assignMe(i)));
         }
         const open = this._jiraExpand?.key === i.key;
-        side.push(sideButton('Cambiar estado',
+        side.push(sideButton('Ver ticket',
             new St.Icon({icon_name: open ? 'pan-up-symbolic' : 'pan-down-symbolic', icon_size: 14}),
             () => this._toggleExpand(i)));
         if (view === 'mine') {
@@ -1609,8 +1616,10 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             err.clutter_text.line_wrap = true;
             out.push({actor: err});
         }
-        if (open)
+        if (open) {
+            out.push(this._detailSpec(i, base));
             out.push(this._moveSpec(i, this._jiraExpand));
+        }
         return out;
     }
 
@@ -1819,6 +1828,36 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
                 if (this._jiraExpand === ex && !this._cancellable.is_cancelled())
                     this._renderSection('jira');
             });
+    }
+
+    /** Detalle del ticket bajo la fila: resumen completo, línea de datos, inicio de la descripción y «Abrir en Jira». */
+    _detailSpec(issue, base) {
+        const wrap = l => {
+            l.clutter_text.line_wrap = true;
+            l.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+            l.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+            l.x_expand = true;
+            return l;
+        };
+        const box = new St.BoxLayout({style_class: 'kaito-move kaito-detail', vertical: true, x_expand: true});
+        box.add_child(wrap(mkLabel(issue.summary, 'kaito-summary kaito-detail-title')));
+        const meta = ticketDetailLine(issue, this._myId);
+        if (meta)
+            box.add_child(wrap(mkLabel(meta, 'kaito-muted')));
+        const snip = descriptionSnippet(issue.text);
+        box.add_child(wrap(mkLabel(snip || 'Sin descripción', snip ? 'kaito-detail-desc' : 'kaito-muted')));
+        const open = new St.Button({style_class: 'kaito-move-btn', label: 'Abrir en Jira', can_focus: true,
+            reactive: true, track_hover: true, x_align: Clutter.ActorAlign.START});
+        open.connect('clicked', () => {
+            try {
+                Gio.AppInfo.launch_default_for_uri(`${base}/browse/${issue.key}`, null);
+            } catch (e) {
+                console.error(`kaito: ${e.message}`);
+            }
+            this.menu.close();
+        });
+        box.add_child(open);
+        return {actor: box};
     }
 
     _moveSpec(issue, ex) {

@@ -355,7 +355,7 @@ export function resolveProjects(seen, cfg) {
     return cfg?.jiraProjects ?? [];
 }
 
-const SEARCH_FIELDS = 'summary,status,priority,description,labels,components,updated,assignee';
+const SEARCH_FIELDS = 'summary,status,priority,description,labels,components,updated,assignee,issuetype';
 
 /** Puro. Ticket de la búsqueda de Jira -> objeto que pinta la extensión. */
 export function mapSearchIssue(i) {
@@ -370,8 +370,26 @@ export function mapSearchIssue(i) {
         components: (i.fields?.components ?? []).map(c => c.name ?? ''),
         updated: i.fields?.updated ?? null,
         assignee: a ? {accountId: a.accountId ?? null, displayName: a.displayName ?? ''} : null,
+        issuetype: i.fields?.issuetype?.name ?? '',
         text: adfToText(i.fields?.description).slice(0, 2000), // ponytail: only used to rank repos
     };
+}
+
+/** Puro. Primeras `maxLines` líneas no vacías (máx. `maxChars` caracteres, con «…») de un texto plano. */
+export function descriptionSnippet(text, maxLines = 4, maxChars = 300) {
+    const lines = String(text ?? '').split('\n').map(l => l.trim()).filter(Boolean);
+    let out = lines.slice(0, maxLines).join('\n');
+    const cut = lines.length > maxLines || out.length > maxChars;
+    if (out.length > maxChars)
+        out = out.slice(0, maxChars).trimEnd();
+    return cut ? `${out}…` : out;
+}
+
+/** Puro. Línea del detalle: prioridad · estado · tipo · responsable (solo si no es `myId`). */
+export function ticketDetailLine(issue, myId = null) {
+    const a = issue?.assignee;
+    const other = a && !(myId !== null && a.accountId === myId) ? shortName(a.displayName) : '';
+    return [issue?.priority?.name, issue?.status, issue?.issuetype, other].filter(Boolean).join(' · ');
 }
 
 /** Devuelve {setup} si falta config/token, o {base, issues} de la JQL dada (ordenados con sortIssues). */
