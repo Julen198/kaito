@@ -87,6 +87,18 @@ struct SettingsView: View {
             Toggle("Abrir al iniciar sesión", isOn: $launchAtLogin)
             Toggle("Avisar de nuevas versiones", isOn: $checkUpdates)
             HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tour de bienvenida")
+                    Text("Te enseña dónde está cada cosa en el menú. Sale solo la primera vez.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Ver otra vez") {
+                    try? model.configStore.update(["tourDone": .bool(false)])
+                    model.reloadConfig()
+                }
+            }
+            HStack {
                 Text("Versión \(model.version)").foregroundStyle(.secondary)
                 Spacer()
                 Button("Buscar actualizaciones") {

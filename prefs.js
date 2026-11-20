@@ -293,6 +293,26 @@ export default class KaitoPreferences extends ExtensionPreferences {
         build();
     }
 
+    /** "Ver otra vez": tourDone=false; el tour sale la próxima vez que se abra el menú. */
+    _tourRow() {
+        const row = new Adw.ActionRow({
+            title: 'Tour de bienvenida',
+            subtitle: 'Te enseña dónde está cada cosa en el menú. Sale solo la primera vez.',
+        });
+        const btn = new Gtk.Button({label: 'Ver otra vez', valign: Gtk.Align.CENTER});
+        btn.connect('clicked', () => {
+            try {
+                updateConfig({tourDone: false});
+                btn.label = 'Sale al abrir el menú';
+                btn.sensitive = false;
+            } catch (e) {
+                console.error(`kaito: no se pudo guardar tourDone: ${e.message}`);
+            }
+        });
+        row.add_suffix(btn);
+        return row;
+    }
+
     fillPreferencesWindow(window) {
         try {
             migrateTerminalOnce();
@@ -471,6 +491,7 @@ export default class KaitoPreferences extends ExtensionPreferences {
         // --- General ---
         const general = new Adw.PreferencesGroup({title: 'General'});
         page.add(general);
+        general.add(this._tourRow());
         general.add(switchRow('Mostrar siempre desplegado',
             'Panel fijo arriba a la derecha, por encima de las ventanas', 'pinned', cfg));
         general.add(switchRow('Mostrar uso de Claude y Codex',

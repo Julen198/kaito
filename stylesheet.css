@@ -128,15 +128,17 @@
 .kaito-fin-ok { background-color: #5BC8AF; color: #06231d; }
 .kaito-fin-ok:hover { background-color: #7fd8c3; }
 
-/* Uso de Claude y Codex */
-.kaito-usage-row { spacing: 10px; padding: 2px 0; }
-.kaito-usage-badge { width: 30px; height: 30px; border-radius: 8px; }
-.kaito-usage-badge-icon { background-color: transparent; }
-.kaito-usage-letter { font-weight: bold; font-size: 15px; }
-.kaito-usage-cell { spacing: 6px; }
-.kaito-usage-pct { font-size: 0.9em; color: #ffffff; min-width: 34px; font-feature-settings: "tnum"; }
-.kaito-usage-note { font-size: 0.85em; }
-.kaito-ring { width: 36px; height: 36px; }
+/* Uso: una columna por proveedor (anillo doble: fuera 5 h, dentro semana; logo en el centro) */
+.kaito-usage-grid { padding: 2px 0 4px 0; }
+.kaito-usage-cell { padding: 0 2px; border-radius: 10px; }
+.kaito-usage-col { spacing: 3px; }
+.kaito-ring-dual-box { width: 56px; height: 56px; margin-bottom: 3px; }
+.kaito-ring-dual { width: 56px; height: 56px; }
+.kaito-usage-tile { width: 18px; height: 18px; border-radius: 5px; }
+.kaito-usage-tile-letter { font-weight: bold; font-size: 10px; }
+.kaito-usage-name { font-weight: bold; font-size: 13px; color: #ffffff; text-align: center; }
+.kaito-usage-line { font-size: 12px; text-align: center; font-feature-settings: "tnum"; }
+.kaito-usage-head-note { font-weight: normal; }
 .kaito-ring-mini { width: 16px; height: 16px; margin-left: 6px; }
 
 /* Tareas programadas */
@@ -283,3 +285,31 @@
 .kaito-tooltip { background-color: #1f1f22; color: #ffffff; border-radius: 8px; padding: 6px 10px; font-size: 13px; spacing: 2px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
 .kaito-tooltip-title { color: #ffffff; font-size: 13px; }
 .kaito-tooltip-detail { color: rgba(255,255,255,0.6); font-size: 12px; }
+
+/* Tour de bienvenida: burbuja clara junto al menú (fuera del menú: no depende del tema del shell) */
+.kaito-tour-focus { background-color: rgba(120,174,237,0.14); border-radius: 10px; box-shadow: inset 0 0 0 2px rgba(120,174,237,0.9); }
+.kaito-tour { width: 360px; background-color: #fafafa; color: #1e1e1e; border-radius: 14px; padding: 18px 20px 14px 20px; spacing: 6px; box-shadow: 0 12px 32px rgba(0,0,0,0.4); }
+.kaito-tour.kaito-tour-welcome { width: 440px; border-radius: 18px; padding: 26px 28px 24px 28px; spacing: 10px; }
+.kaito-tour-arrow { background-color: #fafafa; }
+.kaito-tour-meta { font-size: 12px; color: #5e5c64; }
+.kaito-tour-title { font-size: 18px; font-weight: bold; color: #1e1e1e; }
+.kaito-tour-text { font-size: 14px; color: #2e2e33; }
+.kaito-tour-points { spacing: 8px; padding-top: 6px; }
+.kaito-tour-point { spacing: 10px; }
+.kaito-tour-bullet { width: 8px; height: 8px; border-radius: 4px; margin-top: 5px; }
+.kaito-tour-point-text { font-size: 13px; color: #2e2e33; }
+.kaito-tour-progress { spacing: 4px; padding: 10px 0 4px 0; }
+.kaito-tour-seg { height: 4px; border-radius: 2px; background-color: #d5d3cf; }
+.kaito-tour-seg.kaito-tour-seg-on { background-color: #1c71d8; }
+.kaito-tour-buttons { spacing: 8px; padding-top: 4px; }
+.kaito-tour-btn { min-height: 36px; padding: 0 14px; border-radius: 10px; font-size: 14px; color: #1e1e1e; background-color: #ffffff; border: 1px solid #c0bfbc; }
+.kaito-tour-btn:hover, .kaito-tour-btn:focus { background-color: #ebebed; }
+.kaito-tour-btn.kaito-tour-primary { color: #ffffff; font-weight: bold; background-color: #1c71d8; border: 1px solid #1c71d8; }
+.kaito-tour-btn.kaito-tour-primary:hover, .kaito-tour-btn.kaito-tour-primary:focus { background-color: #1a65c2; border-color: #0f4f9e; }
+.kaito-tour-skip { min-height: 36px; padding: 0 6px; border-radius: 8px; font-size: 14px; color: #5e5c64; background-color: transparent; }
+.kaito-tour-skip:hover, .kaito-tour-skip:focus { color: #1e1e1e; background-color: rgba(0,0,0,0.06); }
+.kaito-tour-logo { width: 34px; height: 34px; border: 3px solid #1c71d8; border-radius: 20px; }
+.kaito-tour-logo-dot { width: 12px; height: 12px; border-radius: 6px; background-color: #1c71d8; }
+.kaito-tour-welcome-title { font-size: 24px; font-weight: bold; color: #1e1e1e; padding-top: 2px; }
+.kaito-tour-welcome-text { font-size: 15px; color: #2e2e33; padding-bottom: 8px; }
+.kaito-tour-toast { background-color: #fafafa; color: #1e1e1e; border-radius: 12px; padding: 12px 16px; font-size: 14px; box-shadow: 0 10px 24px rgba(0,0,0,0.4); }

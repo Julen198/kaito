@@ -139,6 +139,7 @@ export function readConfig() {
     cfg.jiraEnabled = raw.jiraEnabled !== false;
     cfg.kanbanEnabled = raw.kanbanEnabled === true; // opcional: tablero de tareas
     cfg.inboxEnabled = raw.inboxEnabled === true; // opcional: panel de avisos
+    cfg.tourDone = raw.tourDone === true; // tour de bienvenida del menú ya visto (o descartado)
     cfg.workHours = normalizeWorkHours(raw.workHours);
     cfg.dndManual = raw.dndManual === true;
     for (const k of ['dndUntil', 'dndSkipUntil']) {

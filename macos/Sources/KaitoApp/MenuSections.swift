@@ -2,14 +2,10 @@ import AppKit
 import KaitoCore
 import SwiftUI
 
-// MARK: - Uso (anillos de 5 h y semana por proveedor)
+// MARK: - Uso (una fila de columnas: anillo doble 5 h / semana por proveedor)
 
-@MainActor
-struct UsageRing: View {
-    let window: UsageWindowView
-    let caption: String
-
-    static func color(_ level: String) -> Color {
+enum UsageColors {
+    static func level(_ level: String) -> Color {
         switch level {
         case "crit": return Color(red: 0.898, green: 0.286, blue: 0.227) // #E5493A
         case "warn": return Color(red: 1.0, green: 0.639, blue: 0.282) // #FFA348
@@ -17,29 +13,45 @@ struct UsageRing: View {
         }
     }
 
-    /// "5 h 42% · se reinicia 14:30" → "se reinicia 14:30".
-    var detail: String {
-        window.label.components(separatedBy: " · ").dropFirst().joined(separator: " · ")
+    static func tile(_ id: String) -> (bg: Color, fg: Color, symbol: String) {
+        switch id {
+        case "codex": return (.white, Color(white: 0.12), "hexagon")
+        case "claude": return (Color(red: 0.965, green: 0.827, blue: 0.753), Color(red: 0.84, green: 0.33, blue: 0.10), "asterisk")
+        default: return (Color(white: 0.12), Color(white: 0.87), "chevron.left.forwardslash.chevron.right")
+        }
+    }
+}
+
+/// Anillo doble: fuera 5 h (grueso), dentro semana (fino), con el logo pequeño en el centro.
+@MainActor
+struct UsageDoubleRing: View {
+    let id: String
+    let five: UsageWindowView?
+    let week: UsageWindowView?
+
+    private func ring(_ w: UsageWindowView?, size: CGFloat, line: CGFloat) -> some View {
+        ZStack {
+            Circle().stroke(Color.secondary.opacity(0.2), lineWidth: line)
+            if let w {
+                Circle()
+                    .trim(from: 0, to: CGFloat(max(0, min(100, w.pct)) / 100))
+                    .stroke(UsageColors.level(w.level), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+        }
+        .frame(width: size, height: size)
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                Circle().stroke(Color.secondary.opacity(0.2), lineWidth: 5)
-                Circle()
-                    .trim(from: 0, to: CGFloat(max(0, min(100, window.pct)) / 100))
-                    .stroke(Self.color(window.level), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                Text("\(Int(window.pct.rounded()))%")
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-            }
-            .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(caption).font(.caption.weight(.semibold))
-                Text(detail.isEmpty ? " " : detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
+        let t = UsageColors.tile(id)
+        ZStack {
+            ring(five, size: 50, line: 5)
+            ring(week, size: 37, line: 3.5)
+            RoundedRectangle(cornerRadius: 5).fill(t.bg)
+                .frame(width: 18, height: 18)
+                .overlay(Image(systemName: t.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(t.fg))
         }
-        .help(window.label)
+        .frame(width: 56, height: 56)
     }
 }
 
@@ -47,39 +59,30 @@ struct UsageRing: View {
 struct UsageSection: View {
     @EnvironmentObject var model: AppModel
 
-    static func badgeColor(_ id: String) -> Color {
-        id == "codex" ? Color(red: 0.30, green: 0.45, blue: 0.95) : Color(red: 0.85, green: 0.47, blue: 0.34)
-    }
-
     var body: some View {
+        let now = Date().timeIntervalSince1970
+        let note = Usage.resetNote(model.usage.map { (name: $0.name, view: $0.view) }, nowS: now)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Uso").font(.subheadline.weight(.semibold))
                 Spacer()
+                if let note { Text(note).font(.caption).foregroundStyle(.secondary) }
             }
-            ForEach(model.usage) { u in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Text(u.name)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Self.badgeColor(u.id)))
-                        Spacer()
-                        if !u.view.age.isEmpty {
-                            Text(u.view.age).font(.caption2).foregroundStyle(.secondary)
-                        }
+            HStack(alignment: .top, spacing: 6) {
+                ForEach(model.usage) { u in
+                    let line = Usage.columnLine(u.view, nowS: now)
+                    VStack(spacing: 4) {
+                        UsageDoubleRing(id: u.id, five: u.view.five, week: u.view.week)
+                        Text(u.name).font(.caption.weight(.semibold)).lineLimit(1)
+                        Text(line.text).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    HStack(spacing: 16) {
-                        if let five = u.view.five { UsageRing(window: five, caption: "5 h") }
-                        if let week = u.view.week { UsageRing(window: week, caption: "Semana") }
-                        Spacer(minLength: 0)
-                    }
+                    .frame(maxWidth: .infinity)
+                    .opacity(line.stale ? 0.55 : 1)
+                    .help([u.view.five?.label, u.view.week?.label, u.view.age].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"))
                 }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
             }
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
         }
     }
 }

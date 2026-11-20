@@ -226,8 +226,13 @@ ventana de actividad de agentes, intervalo de refresco y borrado de pendientes h
 Se guardan en `config.json` (`jiraJql`, `jiraPreset`, `jiraMax`, `jiraView`, `jiraViews`, `jiraBuiltinViews`, `jiraProjects`, `terminal`, `agentWindowMinutes`,
 `liveSeconds`, `refreshSeconds`, `notifyNeeds`, `notifyDone`, `dailySummary`, `pinned`, `showUsage`, `usagePanelProvider`,
 `tasksEnabled`, `checkUpdates`, `jiraEnabled`, `workHours`, `dndManual`, `dndUntil`, `dndSkipUntil`,
-`dndSilenceReminders`, `agentProviders`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
+`dndSilenceReminders`, `agentProviders`, `tourDone`). `repoRoots` (carpetas donde buscar repos) vale por defecto las que existan de
 `~/Documentos`, `~/Documents`, `~/dev`, `~/code`, `~/projects` y `~/src`.
+
+Tour de bienvenida: la primera vez que abres el menú (`tourDone` sin poner) sale una tarjeta para recorrer
+cada zona del menú con una burbuja al lado ("Ahora no", "Saltar" o terminarlo lo marcan como visto; cerrar
+el menú a medias lo deja pendiente). Ajustes > General > "Tour de bienvenida" > "Ver otra vez" lo vuelve a
+sacar en la siguiente apertura. Textos y pasos en `tour.js` (`node tour.test.js`); burbuja en `tourui.js`.
 
 `pinned` (Ajustes > General > "Mostrar siempre desplegado") deja un panel fijo arriba a la
 derecha, por encima de las ventanas (se oculta en pantalla completa y en la vista de
@@ -361,7 +366,7 @@ encuentras Codex y no tienes ya un `notify`; si tienes otro, no lo toca y te dic
   (`jiraBuiltinViews`) y vistas propias con nombre y JQL (`jiraViews: [{id, name, jql, enabled}]`).
 - Pruebas: `node when.test.js` (con `TZ=Europe/Madrid` prueba también el cambio de hora), `gjs -m kaito.test.js`, `gjs -m jiradraft.test.js`,
   `XDG_CONFIG_HOME=$(mktemp -d) XDG_DATA_HOME=$(mktemp -d) gjs -m tasks.test.js`, `node quiet.test.js`, `node providers.test.js`,
-  `node board.test.js` (tablero y panel de avisos), `node usage.test.js` (anillos de uso)
+  `node board.test.js` (tablero y panel de avisos), `node usage.test.js` (anillos de uso), `node tour.test.js` (tour)
   (también con `gjs -m`), `bash tests/cli.test.sh`, `hooks/kaito-hook.py --selftest`, `hooks/kaito-statusline.py --selftest`,
   `hooks/kaito-codex-notify.py --selftest`.
 
@@ -442,14 +447,15 @@ de 24 h se borran solos.
 
 ## Uso de Claude y Codex
 
-Sección "Uso" arriba del menú (y de la tarjeta fija), en anillos: una fila por proveedor activado
-(`agentProviders`) con una insignia (el icono de su app si está instalado en el tema de iconos; si no, su
-inicial sobre su color), un anillo de 5 h y otro semanal con su porcentaje (columna "5 h · semana") y una
-nota a la derecha: "reinicia 14:50" o, si las ventanas ya se reiniciaron, la antigüedad de los datos
-("hace 6 d"). Verde < 70 %, naranja 70-90 %, rojo >= 90 %; lo reiniciado (= 0 %) o viejo sale atenuado.
-Al pasar el ratón por la insignia, la nota dice proveedor y horas de reinicio. **Gemini CLI** (si está
-instalado) sale como "sin datos de límite": su cuota vive en el servidor y no guarda nada fiable en local,
-así que no se inventa ningún número. **OpenCode** no tiene límites propios: su fila dice qué proveedor usa
+Sección "Uso" arriba del menú (y de la tarjeta fija): una fila de columnas iguales, una por proveedor
+activado (`agentProviders`). Cada columna es un anillo doble (fuera la ventana de 5 h, más gruesa; dentro la
+semanal) con el logo del proveedor en el centro (el icono de su app si está instalado en el tema de iconos;
+si no, su inicial), su nombre y una línea corta: "29 % · 65 %" (5 h · semana) o, si las ventanas ya se
+reiniciaron, la antigüedad de los datos ("hace 6 d"). A la derecha de la cabecera, el próximo reinicio con
+su proveedor ("Claude reinicia 14:50"). Verde < 70 %, naranja 70-90 %, rojo >= 90 %; lo reiniciado o viejo
+sale atenuado. Al pasar el ratón por una columna, un tooltip da porcentajes y horas de reinicio. **Gemini CLI**
+(si está instalado) sale como "sin datos de límite" (anillo con pista discontinua): su cuota vive en el servidor
+y no guarda nada fiable en local, así que no se inventa ningún número. **OpenCode** no tiene límites propios: su columna dice qué proveedor usa
 ("usa tu Claude"), leído de `~/.config/opencode/opencode.json` (`model`) o del último modelo usado
 (`~/.local/state/opencode/model.json`), solo lectura. En la barra superior, un mini anillo con el uso de
 5 h del proveedor de Ajustes > General > "Anillo en la barra superior" (`usagePanelProvider`: `claude` por

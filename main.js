@@ -35,7 +35,7 @@ import {InboxPanel} from './inboxui.js';
 import {STATE_NAMES, isLocalKey, todoState, withState, localTaskPrompt, taskSlug, relAgo} from './board.js';
 import {inboxPush, inboxRoute, unreadCount, pendingNeeds, resolveItem} from './inbox.js';
 import {QuietController} from './dnd.js';
-import {RING, MINI_RING, RING_TRACK, DIM_OPACITY, USAGE_COLUMNS, BADGE_ICONS, hexRgb, usageRows, panelRing} from './usage.js';
+import {RING, MINI_RING, DUAL_RING, RING_TRACK, DIM_OPACITY, BADGE_ICONS, hexRgb, usageRows, usageHeadNote, panelRing} from './usage.js';
 import {PROVIDER_BY_ID} from './providers.js';
 import {quietLabel, snoozeLabel, snoozeUntil} from './quiet.js';
 import {findTicketBranches, findTicketWork, finishKey, finishLines, markFinished, prUrl, reviewReminderText} from './finish.js';
@@ -46,6 +46,8 @@ import {TaskScheduler, readTasks, patchTask, deleteTask, readLastRun, setEnabled
 import {shortLabel, nextLabel} from './when.js';
 import {UpdateNotice} from './updates.js';
 import {attachTooltip} from './tooltip.js';
+import {tourSteps} from './tour.js';
+import {MenuTour} from './tourui.js';
 
 const C = {live: '#5BC8AF', idle: '#9A9996', jira: '#78AEED', todo: '#F5C211', needs: '#FFA348'};
 const DONE_MSG = 'Terminó, esperando tu respuesta';
@@ -58,6 +60,7 @@ const KANBAN_KEY = 'kanban-shortcut'; // clave nueva del esquema (0.5.0): sin vo
 const STATE_PILL = {todo: 'kaito-pill-new', doing: 'kaito-pill-doing', review: 'kaito-pill-review', done: 'kaito-pill-done'};
 const PILL = {new: 'kaito-pill-new', indeterminate: 'kaito-pill-progress', done: 'kaito-pill-done'};
 const PICK_MAX = 12;
+const TOUR_DELAY_MS = 350; // la bienvenida sale cuando el menú ya ha terminado de abrirse
 const PICK_PILL = {branch: 'tiene rama', issue: 'este ticket', match: 'coincide', project: 'último'};
 const DONE_MIN_MS = 3 * 60 * 1000; // aviso de "terminó" solo tras trabajar al menos esto
 const MOVED_MSG = 'Movido en Jira';
@@ -190,6 +193,54 @@ function usageRing(spec = RING, styleClass = 'kaito-ring') {
     return ring;
 }
 
+/**
+ * Anillo doble de una columna de uso (St.DrawingArea + Cairo): fuera la ventana de 5 h, dentro la semana,
+ * cada uno con su pista tenue y su arco desde las 12. Sin límites propios (dashed) solo las pistas, discontinuas.
+ * set(rings, dashed): rings = [anillo 5 h, anillo semana] de usageRows (null si falta una ventana).
+ */
+function dualRing() {
+    const area = new St.DrawingArea({style_class: 'kaito-ring-dual', x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER});
+    const ring = {actor: area, rings: [null, null], dashed: false};
+    area.connect('repaint', a => {
+        const cr = a.get_context();
+        try {
+            const [w, h] = a.get_surface_size();
+            const size = Math.min(w, h);
+            if (size <= 0)
+                return;
+            const k = size / DUAL_RING.size;
+            [DUAL_RING.outer, DUAL_RING.inner].forEach((spec, i) => {
+                const r = spec.r * k;
+                cr.setLineWidth(spec.stroke * k);
+                cr.setSourceRGBA(...RING_TRACK);
+                if (ring.dashed) {
+                    cr.setLineCap(Cairo.LineCap.BUTT);
+                    cr.setDash([DUAL_RING.dash * k, DUAL_RING.dash * k], 0);
+                }
+                cr.arc(w / 2, h / 2, r, 0, 2 * Math.PI);
+                cr.stroke();
+                cr.setDash([], 0);
+                cr.setLineCap(Cairo.LineCap.ROUND);
+                const m = ring.rings[i];
+                if (m && m.frac > 0) {
+                    const start = -Math.PI / 2;
+                    cr.setSourceRGBA(...hexRgb(m.color), 1);
+                    cr.arc(w / 2, h / 2, r, start, start + 2 * Math.PI * m.frac);
+                    cr.stroke();
+                }
+            });
+        } finally {
+            cr.$dispose();
+        }
+    });
+    ring.set = (rings, dashed = false) => {
+        ring.rings = [rings?.[0] ?? null, rings?.[1] ?? null];
+        ring.dashed = dashed;
+        area.queue_repaint();
+    };
+    return ring;
+}
+
 const badgeIconCache = new Map();
 /** Icono que instala la app del proveedor en el tema (hicolor: /usr/share/icons, ~/.local/share/icons), o null. */
 function providerIconName(id) {
@@ -206,19 +257,18 @@ function providerIconName(id) {
     return badgeIconCache.get(id);
 }
 
-/** Insignia de 30 px: el icono del proveedor si está instalado; si no, su inicial sobre su color. */
-function providerBadge(row) {
+/** Baldosa de 18 px en el centro del anillo: el icono de la app del proveedor si está instalado; si no, su inicial. */
+function providerTile(row) {
     const icon = providerIconName(row.id);
-    const box = new St.Bin({
-        style_class: icon ? 'kaito-usage-badge kaito-usage-badge-icon' : 'kaito-usage-badge',
-        style: icon ? null : `background-color: ${row.badge.bg};`,
-        y_align: Clutter.ActorAlign.CENTER, reactive: true, track_hover: true, accessible_name: row.tooltip,
+    const tile = new St.Bin({
+        style_class: 'kaito-usage-tile', style: `background-color: ${row.badge.tile};`,
+        x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER,
     });
-    box.set_child(icon
-        ? new St.Icon({icon_name: icon, icon_size: 28})
-        : new St.Label({text: row.badge.letter, style_class: 'kaito-usage-letter', style: `color: ${row.badge.fg};`,
+    tile.set_child(icon
+        ? new St.Icon({icon_name: icon, icon_size: 13, x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER})
+        : new St.Label({text: row.badge.letter, style_class: 'kaito-usage-tile-letter', style: `color: ${row.badge.tileFg};`,
             x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER}));
-    return box;
+    return tile;
 }
 
 function spacer() {
@@ -348,12 +398,22 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this.menu.addMenuItem(this._update.item, 0);
         this._syncUpdateBadge(this._update);
 
+        this._tour = new MenuTour({
+            menu: this.menu,
+            steps: () => this._tourSteps(),
+            targets: zone => this._tourTargets(zone),
+            onDone: () => this._markTourDone(),
+        });
         this.menu.connect('open-state-changed', (_m, open) => {
             if (open) {
                 this._syncMenuTone();
                 this._applyMenuCap();
                 this._refresh();
-            } else if (this._jiraPick) {
+                this._maybeTour();
+                return;
+            }
+            this._cancelTour();
+            if (this._jiraPick) {
                 this._jiraPick = null;
                 this._renderSection('jira');
                 this._renderJiraTabs();
@@ -615,6 +675,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         item.add_child(h.spacer);
         item.add_child(h.count);
         this._counters[id] = h.count;
+        if (id === 'usage')
+            h.count.add_style_class_name('kaito-usage-head-note');
         this._headers[id] = item;
         this.menu.addMenuItem(item);
     }
@@ -660,6 +722,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'kaito-row'});
         item.add_child(this._makeEntry());
         this.menu.addMenuItem(item);
+        this._entryItem = item;
 
         // Opcionales (Ajustes): tablero de tareas y panel de avisos; ocultos si están desactivados.
         const board = new PopupMenu.PopupMenuItem('Abrir tablero');
@@ -684,6 +747,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         capture.add_child(this._shortcutLabel);
         capture.connect('activate', () => this._ext.openCapture());
         this.menu.addMenuItem(capture);
+        this._captureItem = capture;
         this.syncShortcutLabel();
 
         this._buildDnd();
@@ -692,6 +756,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         prefs.add_style_class_name('kaito-settings');
         prefs.connect('activate', () => this._ext.openPreferences());
         this.menu.addMenuItem(prefs);
+        this._prefsItem = prefs;
     }
 
     /** "No molestar": interruptor (manual, sin límite) + 1 h, Hasta mañana y Desactivar. */
@@ -724,6 +789,78 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this.menu.addMenuItem(row);
         this._dnd = {sw, status, off};
         this.syncQuiet();
+    }
+
+    // --- Tour de bienvenida (tour.js / tourui.js) ---
+
+    /** Primera apertura del menú con tourDone pendiente: la bienvenida, cuando el menú ya ha terminado de abrirse. */
+    _maybeTour() {
+        if (this._tourStartId || this._tour.active || readConfig().tourDone)
+            return;
+        this._tourStartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TOUR_DELAY_MS, () => {
+            this._tourStartId = 0;
+            if (this.menu.isOpen && !readConfig().tourDone) {
+                try {
+                    this._tour.start();
+                } catch (e) {
+                    console.error(`kaito: tour: ${e.message}`);
+                    this._tour.stop();
+                }
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    /** Menú cerrado: fuera burbuja y resaltado; el tour sigue pendiente (vuelve a salir en la siguiente apertura). */
+    _cancelTour() {
+        if (this._tourStartId) {
+            GLib.source_remove(this._tourStartId);
+            this._tourStartId = 0;
+        }
+        this._tour?.stop();
+    }
+
+    _markTourDone() {
+        try {
+            updateConfig({tourDone: true});
+        } catch (e) {
+            console.error(`kaito: no se pudo guardar tourDone: ${e.message}`);
+        }
+        this._cfg.tourDone = true;
+    }
+
+    /** Pasos según lo que se ve ahora en el menú (Jira/tablero de Ajustes, uso o tareas sin datos se saltan). */
+    _tourSteps() {
+        const cfg = readConfig();
+        const vis = a => !!a?.visible;
+        const shown = {
+            usage: vis(this._headers.usage), agents: vis(this._headers.agents), jira: cfg.jiraEnabled && vis(this._headers.jira),
+            todos: vis(this._headers.todos), reminders: vis(this._headers.reminders), tasks: vis(this._headers.tasks),
+            notes: vis(this._headers.notes), create: vis(this._captureItem), settings: vis(this._prefsItem),
+        };
+        return tourSteps({jira: cfg.jiraEnabled, kanban: cfg.kanbanEnabled, shown, accel: this._captureAccel()});
+    }
+
+    /** Filas de primer nivel del menú que forman cada zona del tour. */
+    _tourTargets(zone) {
+        const sec = id => [this._headers[id], this._sections[id]?.actor];
+        const zones = {
+            usage: sec('usage'), agents: sec('agents'), reminders: sec('reminders'), tasks: sec('tasks'), notes: sec('notes'),
+            jira: [this._headers.jira, this._jiraTabsItem, this._jiraWrap?.actor],
+            todos: [...sec('todos'), this._entryItem, this._kanbanItem],
+            create: [this._captureItem], settings: [this._prefsItem],
+        };
+        return (zones[zone] ?? []).filter(a => a?.visible);
+    }
+
+    /** Atajo de la captura rápida tal como se enseña ("Ctrl+Alt+Espacio"); '' si no hay. */
+    _captureAccel() {
+        try {
+            return prettyAccel(this._ext.getSettings().get_strv(SHORTCUT_KEY)[0]);
+        } catch (e) {
+            console.warn(`kaito: atajo de captura: ${e.message}`);
+            return '';
+        }
     }
 
     syncShortcutLabel() {
@@ -1159,35 +1296,43 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
         this._updateLabel();
     }
 
-    /** Una fila por proveedor: insignia, anillos de 5 h y semana con su porcentaje y una nota a la derecha. */
+    /**
+     * Una fila de columnas iguales, una por proveedor: anillo doble (fuera 5 h, dentro semana) con su logo en
+     * el centro, el nombre y una línea corta ("29 % · 65 %", "hace 7 d", "usa tu OpenAI"). Columna atenuada
+     * con datos viejos o sin límites propios; al pasar el ratón, el detalle (porcentajes y reinicios).
+     */
     _usageSpecs() {
-        const specs = (this._usageRows ?? []).map(row => {
-            const box = new St.BoxLayout({style_class: 'kaito-usage-row', x_expand: true, accessible_name: row.tooltip});
-            const badge = providerBadge(row);
-            box.add_child(badge);
-            for (const r of row.rings) {
-                if (!r)
-                    continue;
-                const cell = new St.BoxLayout({style_class: 'kaito-usage-cell', y_align: Clutter.ActorAlign.CENTER,
-                    accessible_name: `${r.kind === 'five' ? '5 h' : 'semana'} ${r.text}`});
-                const ring = usageRing();
-                ring.set(r);
-                cell.add_child(ring.actor);
-                cell.add_child(mkLabel(r.text, 'kaito-usage-pct'));
-                cell.opacity = r.dim || row.dim ? DIM_OPACITY : 255;
-                box.add_child(cell);
+        const rows = this._usageRows ?? [];
+        this._counts.usage = rows.length;
+        if (!rows.length)
+            return [];
+        const layout = new Clutter.GridLayout({column_homogeneous: true});
+        const grid = new St.Widget({style_class: 'kaito-usage-grid', layout_manager: layout, x_expand: true});
+        rows.forEach((row, i) => {
+            const col = new St.BoxLayout({style_class: 'kaito-usage-col', vertical: true, x_expand: true});
+            const ringBox = new St.Widget({
+                style_class: 'kaito-ring-dual-box', layout_manager: new Clutter.BinLayout(),
+                x_align: Clutter.ActorAlign.CENTER,
+            });
+            const ring = dualRing();
+            ring.set(row.rings, !row.limits);
+            ringBox.add_child(ring.actor);
+            ringBox.add_child(providerTile(row));
+            col.add_child(ringBox);
+            for (const [text, cls] of [[row.name, 'kaito-usage-name'], [row.line, 'kaito-muted kaito-usage-line']]) {
+                const l = new St.Label({text, style_class: cls, x_expand: true});
+                l.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+                col.add_child(l);
             }
-            box.add_child(spacer());
-            const note = mkLabel(row.note, row.rings.length ? 'kaito-muted kaito-usage-note' : 'kaito-muted kaito-usage-note kaito-usage-nolimit');
-            if (row.dim)
-                note.opacity = DIM_OPACITY;
-            box.add_child(note);
-            // "Tooltip": al pasar por la insignia, la nota dice proveedor y reinicios.
-            badge.connect('notify::hover', () => note.set_text(badge.hover ? row.tooltip : row.note));
-            return {actor: box};
+            col.opacity = row.dim || !row.limits ? DIM_OPACITY : 255;
+            const cell = new St.Button({
+                style_class: 'kaito-usage-cell', child: col, reactive: true, track_hover: true, can_focus: false,
+                x_expand: true, accessible_name: row.tooltip,
+            });
+            attachTooltip(cell, () => ({title: row.tooltip}));
+            layout.attach(cell, i, 0, 1, 1);
         });
-        this._counts.usage = specs.length;
-        return specs;
+        return [{actor: grid}];
     }
 
     /** La sección "Uso" (cabecera incluida) solo existe si algún proveedor tiene datos. */
@@ -2317,6 +2462,8 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             row.add_child(h.spacer);
             row.add_child(h.count);
             this._cardCounters[id] = h.count;
+            if (id === 'usage')
+                h.count.add_style_class_name('kaito-usage-head-note');
             this._cardHeaders[id] = row;
             body.add_child(row);
             this._cardSec[id] = new St.BoxLayout({vertical: true, x_expand: true});
@@ -2412,7 +2559,7 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
             seg.opacity = n ? 255 : 115;
         }
         // Cabecera de Jira: la vista activa. El panel sigue contando "Mías".
-        const shown = {...c, usage: this._usageRows?.some(r => r.rings.some(Boolean)) ? USAGE_COLUMNS : '', jira: this._jiraView === 'mine' ? c.jira : this._views[this._jiraView]?.issues.length ?? 0};
+        const shown = {...c, usage: usageHeadNote(this._usageRows), jira: this._jiraView === 'mine' ? c.jira : this._views[this._jiraView]?.issues.length ?? 0};
         for (const [id] of SECTIONS) {
             this._counters[id]?.set_text(String(shown[id]));
             this._cardCounters?.[id]?.set_text(String(shown[id]));
@@ -2537,6 +2684,9 @@ const indicatorClass = loadId => (Indicator ??= GObject.registerClass({
     }
 
     destroy() {
+        this._cancelTour();
+        this._tour?.destroy();
+        this._tour = null;
         this._cancellable.cancel();
         this._jiraPick = null; // un idle_add pendiente del buscador ya no repinta nada
         this._update?.destroy();

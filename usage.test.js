@@ -2,6 +2,7 @@
 import {
     usageColor, ringFraction, hexRgb, pctText, formatReset, shortAge, ringModel, usageNote, usageTooltip,
     opencodeProvider, opencodeNote, usageRows, panelRing, normalizePanelProvider, BADGES, USAGE_COLORS,
+    usageLine, usageHeadNote, DUAL_RING,
 } from './usage.js';
 
 let n = 0;
@@ -74,6 +75,22 @@ eq([rows.length, rows[0].rings[0], rows[0].rings[1].text], [1, null, '18 %'], 'f
 eq(usageRows({views: {claude: live}, enabled: {...all, claude: false}}, NOW), [], 'filas: Claude desactivado');
 eq(usageRows(undefined, NOW), [], 'filas: sin argumentos');
 eq(Object.keys(BADGES), ['claude', 'codex', 'gemini', 'opencode'], 'insignias');
+eq(Object.values(BADGES).every(b => /^#[0-9a-f]{6}$/i.test(b.tile) && /^#[0-9a-f]{6}$/i.test(b.tileFg)), true, 'baldosas del anillo');
+
+// Columnas: línea corta y nota de la cabecera
+rows = usageRows({views, enabled: all, installed: {gemini: true, opencode: true}, opencode: 'openai'}, NOW);
+eq(rows.map(r => r.line), ['42 % · 18 %', 'hace 6 d', 'sin datos de límite', 'usa tu OpenAI'], 'columnas: línea corta');
+eq(rows.map(r => r.limits), [true, true, false, false], 'columnas: con límites propios');
+eq(usageHeadNote(rows), 'Claude reinicia 14:50', 'cabecera: reinicio de Claude');
+eq(usageHeadNote(rows.slice(1)), '', 'cabecera: sin reinicios vivos (Codex viejo)');
+eq(usageHeadNote([{...rows[1], dim: false, note: 'reinicia 15:10'}]), 'Codex reinicia 15:10', 'cabecera: Codex');
+eq(usageHeadNote(undefined), '', 'cabecera: sin filas');
+eq(usageLine({rings: [null, {pct: 30.4}], note: 'reinicia hoy 09:00', dim: false}), '– · 30 %', 'línea: solo semana');
+eq(usageLine({rings: [{pct: 99.6}, null], note: '', dim: false}), '100 % · –', 'línea: solo 5 h');
+eq([usageLine(null), usageLine({rings: [], note: 'x'})], ['', 'x'], 'línea: sin datos');
+eq(DUAL_RING.outer.r > DUAL_RING.inner.r && DUAL_RING.outer.stroke > DUAL_RING.inner.stroke
+    && DUAL_RING.outer.r + DUAL_RING.outer.stroke / 2 <= DUAL_RING.size / 2
+    && DUAL_RING.inner.r + DUAL_RING.inner.stroke / 2 < DUAL_RING.outer.r - DUAL_RING.outer.stroke / 2, true, 'anillo doble: geometría');
 
 // Anillo del panel
 eq(panelRing(views, 'claude').label, 'Claude 5 h 42 %', 'panel: Claude');

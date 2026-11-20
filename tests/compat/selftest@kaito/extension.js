@@ -139,6 +139,8 @@ async function run() {
         console.log('SELFTEST done');
         return;
     }
+    // El tour de bienvenida sale en la primera apertura del menú: se prueba en su paso ('tour').
+    patchConfig({tourDone: true});
     // KAITO_COMPAT_FEATURES=on (in-container.sh): arranca con tablero y avisos activados.
     if (ind._cfg.kanbanEnabled || ind._cfg.inboxEnabled) {
         await step('features-preset', async () => {
@@ -233,6 +235,115 @@ async function run() {
         if (tips().length)
             throw new Error('el tooltip sigue con el menú cerrado');
         return `${t.length} etiquetas`;
+    });
+    await step('tour', async () => {
+        // Clic real (dispositivo virtual): la burbuja está fuera del menú y el menú no debe cerrarse.
+        const seat = Clutter.get_default_backend().get_default_seat();
+        const dev = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        const clickAt = async (x, y) => {
+            dev.notify_absolute_motion(GLib.get_monotonic_time(), x, y);
+            await wait(80);
+            dev.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED);
+            await wait(40);
+            dev.notify_button(GLib.get_monotonic_time(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED);
+            await wait(250);
+        };
+        const click = async btn => {
+            const [x, y] = btn.get_transformed_position();
+            const [w, h] = btn.get_transformed_size();
+            await clickAt(x + w / 2, y + h / 2);
+        };
+        const tour = ind._tour;
+        const root = () => tour._root;
+        const btn = label => root() && findButton(root(), b => b.label === label);
+        const done = () => readJsonFile(CONFIG(), {}).tourDone === true;
+        // El diálogo de bienvenida de la distro tapa la pantalla; el primer clic virtual a veces se pierde.
+        for (const d of Main.layoutManager.modalDialogGroup.get_children())
+            d.close?.();
+        await wait(600);
+        await clickAt(400, 400);
+        await wait(300);
+        patchConfig({tourDone: false});
+        ind.menu.open(false);
+        if (!await until(() => tour.active, 3000))
+            throw new Error('sin bienvenida al abrir el menú con tourDone=false');
+        await wait(300); // un ciclo de layout: la burbuja ya tiene posición
+        if (!labels(root()).includes('Kaito ya está en tu barra'))
+            throw new Error(`bienvenida: ${labels(root())}`);
+        if (Main.layoutManager.uiGroup.get_last_child() !== root())
+            throw new Error('la burbuja no está encima del menú');
+        await screenshot('tour-welcome');
+        const seen = [];
+        root().connect('captured-event', (_a, e) => {
+            if (e.type() === Clutter.EventType.BUTTON_PRESS)
+                seen.push(`${global.stage.get_event_actor(e)} @${e.get_coords().map(Math.round)}`);
+            return Clutter.EVENT_PROPAGATE;
+        });
+        const vb = btn('Ver el tour');
+        const where = `${vb.get_transformed_position().map(Math.round)} ${vb.get_transformed_size().map(Math.round)} modal ${Main.modalCount}`;
+        await click(vb);
+        if (!ind.menu.isOpen || !tour.active)
+            throw new Error(`«Ver el tour» cerró algo: menú ${ind.menu.isOpen}, tour ${tour.active}; botón ${where}; pulsaciones ${seen.join(' | ') || 'ninguna'}`);
+        const total = tour._steps.length;
+        if (!labels(root()).includes(`Paso 1 de ${total}`) || !ind._headers.usage.has_style_class_name('kaito-tour-focus'))
+            throw new Error(`paso 1: ${labels(root())}`);
+        if (ind._headers.agents.opacity === 255)
+            throw new Error('el resto del menú no se atenúa');
+        await click(btn('Siguiente'));
+        if (!ind.menu.isOpen || !labels(root()).includes(`Paso 2 de ${total}`))
+            throw new Error(`clic en «Siguiente»: menú ${ind.menu.isOpen}, ${root() ? labels(root()) : 'sin burbuja'}`);
+        await screenshot('tour-step');
+        // Clic sobre el menú: se ignora.
+        const [hx, hy] = ind._headers.notes.get_transformed_position();
+        await clickAt(hx + 20, hy + 5);
+        if (!ind.menu.isOpen || !tour.active)
+            throw new Error('un clic en el menú cerró el tour');
+        await click(btn('Atrás'));
+        if (!labels(root()).includes(`Paso 1 de ${total}`))
+            throw new Error('«Atrás» no volvió al paso 1');
+        // Clic fuera de todo: se cierra el menú, el tour queda pendiente y todo se restaura.
+        const area = Main.layoutManager.getWorkAreaForMonitor(Main.layoutManager.primaryIndex);
+        await clickAt(area.x + 5, area.y + area.height - 5);
+        if (ind.menu.isOpen || tour.active || done())
+            throw new Error(`clic fuera: menú ${ind.menu.isOpen}, tour ${tour.active}, hecho ${done()}`);
+        if (ind._headers.agents.opacity !== 255 || ind._headers.usage.has_style_class_name('kaito-tour-focus'))
+            throw new Error('resaltado sin restaurar');
+        // Otra vez: sale la bienvenida; se recorre entero (con botones) hasta «Terminar».
+        ind.menu.open(false);
+        if (!await until(() => tour.active, 3000))
+            throw new Error('la bienvenida no vuelve tras cerrar el menú a medias');
+        await wait(300);
+        btn('Ver el tour').emit('clicked', 1);
+        for (let i = 1; i < total; i++)
+            btn('Siguiente').emit('clicked', 1);
+        if (!labels(root()).includes(`Paso ${total} de ${total}`) || !btn('Terminar'))
+            throw new Error(`último paso: ${labels(root())}`);
+        const ids = tour._steps.map(x => x.id).join(',');
+        await wait(300); // la burbuja se recoloca en cada paso
+        await screenshot('tour-last');
+        await click(btn('Terminar'));
+        if (!ind.menu.isOpen || tour.active || !done() || !tour._toast)
+            throw new Error(`terminar: menú ${ind.menu.isOpen}, tour ${tour.active}, hecho ${done()}, aviso ${!!tour._toast}`);
+        await screenshot('tour-done');
+        ind.menu.close(false);
+        await wait(200);
+        ind.menu.open(false);
+        await wait(700);
+        if (tour.active)
+            throw new Error('sale otra vez con tourDone=true');
+        ind.menu.close(false);
+        // «Ahora no» también lo marca como visto.
+        patchConfig({tourDone: false});
+        ind.menu.open(false);
+        if (!await until(() => tour.active, 3000))
+            throw new Error('sin bienvenida tras «Ver otra vez»');
+        await wait(300);
+        await click(btn('Ahora no'));
+        if (!ind.menu.isOpen || tour.active || !done())
+            throw new Error(`«Ahora no»: menú ${ind.menu.isOpen}, tour ${tour.active}, hecho ${done()}`);
+        ind.menu.close(false);
+        await wait(800); // que el cambio de config.json (tourDone) se procese antes del siguiente paso
+        return `${total} pasos (${ids}); clics reales sin cerrar el menú`;
     });
     await step('pinned-card', async () => {
         ind._buildCard();
@@ -416,22 +527,35 @@ async function run() {
             throw new Error(`filas: ${ids}`);
         const sec = ind._sections.usage.actor;
         const t = labels(sec);
-        for (const want of ['42 %', '18 %', '78 %', '95 %', 'sin datos de límite'])
+        for (const want of ['Claude', 'Codex', 'Gemini', 'OpenCode', '42 % · 18 %', '78 % · 95 %', 'sin datos de límite'])
             if (!t.includes(want))
                 throw new Error(`falta «${want}» en Uso: ${t.join(' | ')}`);
-        // Insignia: icono de la app si el tema lo tiene (p. ej. claude-desktop en el host), si no la inicial.
+        // Logo en el centro del anillo: icono de la app si el tema lo tiene (p. ej. claude-desktop en el host), si no la inicial.
         let icons = 0;
         walk(sec, a => {
-            if (a.has_style_class_name?.('kaito-usage-badge') && a.get_first_child() instanceof St.Icon)
+            if (a.has_style_class_name?.('kaito-usage-tile') && a.get_first_child() instanceof St.Icon)
                 icons++;
         });
         const letters = t.filter(x => ['C', 'X', 'G', 'O'].includes(x)).length;
         if (icons + letters !== 4)
-            throw new Error(`insignias: ${icons} iconos + ${letters} iniciales`);
-        if (!t.some(x => x.startsWith('reinicia ')))
-            throw new Error('sin «reinicia …»');
-        if (ind._counters.usage.text !== '5 h · semana' || !ind._headers.usage.visible)
+            throw new Error(`logos: ${icons} iconos + ${letters} iniciales`);
+        if (!/^Claude reinicia /.test(ind._counters.usage.text) || !ind._headers.usage.visible)
             throw new Error(`cabecera: «${ind._counters.usage.text}»`);
+        // Las cuatro columnas caben en el ancho del menú (mismo ancho, sin desbordar).
+        ind.menu.open(false);
+        await wait(500);
+        let grid = null; // el menú se repinta al abrirse: la rejilla se busca después
+        walk(sec, a => {
+            if (!grid && a.has_style_class_name?.('kaito-usage-grid'))
+                grid = a;
+        });
+        const cells = grid?.get_children() ?? [];
+        const widths = cells.map(c => Math.round(c.width));
+        const [gx] = grid?.get_transformed_position() ?? [0];
+        const [bx] = ind.menu.box.get_transformed_position();
+        if (cells.length !== 4 || new Set(widths).size !== 1 || gx + grid.width > bx + ind.menu.box.width)
+            throw new Error(`columnas: ${widths} (rejilla ${gx}+${grid?.width}, menú ${bx}+${ind.menu.box.width})`);
+        ind.menu.close(false);
         const areas = [];
         walk(sec, a => {
             if (a instanceof St.DrawingArea)
@@ -464,7 +588,7 @@ async function run() {
         patchConfig({showUsage: true});
         if (!await until(() => ind._headers.usage.visible && ind._mini.actor.visible))
             throw new Error('el uso no volvió');
-        return `4 filas (${icons} iconos, ${letters} iniciales), 4 anillos + mini, ${painted} repintados`;
+        return `4 columnas (${icons} iconos, ${letters} iniciales), 4 anillos dobles + mini, ${painted} repintados`;
     });
     await step('kanban', async () => {
         if (m.kanban.isOpen || ind._kanbanItem.visible || ind._headerTitles.todos.text !== 'Pendientes')

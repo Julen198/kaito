@@ -28,6 +28,7 @@ public struct UsageView: Equatable, Sendable {
     public var five: UsageWindowView?
     public var week: UsageWindowView?
     public var age: String
+    public var ts: Double? = nil
 }
 
 /// Port de las funciones de uso de common.js (statusLine de Claude y rollouts de Codex).
@@ -166,7 +167,35 @@ public enum Usage {
         }
         let five = mk("five", u.five), week = mk("week", u.week)
         if five == nil && week == nil { return nil }
-        return UsageView(five: five, week: week, age: ageLabel(u.ts, nowS: nowS))
+        return UsageView(five: five, week: week, age: ageLabel(u.ts, nowS: nowS), ts: u.ts)
+    }
+
+    /// "hace 5 min" / "hace 3 h" / "hace 7 d".
+    public static func agoShort(_ ts: Double, nowS: Double) -> String {
+        let m = max(0, Int(((nowS - ts) / 60).rounded(.down)))
+        if m < 60 { return "hace \(max(1, m)) min" }
+        if m < 48 * 60 { return "hace \(m / 60) h" }
+        return "hace \(m / 1440) d"
+    }
+
+    /// Línea bajo el anillo: "29 % · 65 %", o "hace 7 d" (stale) si el dato es de hace más de 1 h y ambas ventanas ya se reiniciaron.
+    public static func columnLine(_ v: UsageView, nowS: Double) -> (text: String, stale: Bool) {
+        let wins = [v.five, v.week].compactMap { $0 }
+        if let ts = v.ts, !wins.isEmpty, wins.allSatisfy({ $0.reset }), nowS - ts >= 3600 {
+            return (agoShort(ts, nowS: nowS), true)
+        }
+        func p(_ w: UsageWindowView?) -> String { w.map { "\(Int($0.pct.rounded())) %" } ?? "–" }
+        return ("\(p(v.five)) · \(p(v.week))", false)
+    }
+
+    /// Nota de la cabecera: "Claude reinicia 16:30" (primer proveedor con 5 h vigente y fecha de reinicio futura).
+    public static func resetNote(_ items: [(name: String, view: UsageView)], nowS: Double, calendar cal: Calendar = .current) -> String? {
+        for it in items {
+            if let f = it.view.five, !f.reset, let r = f.resetsAt, r > nowS {
+                return "\(it.name) reinicia \(formatReset(r, nowS: nowS, calendar: cal))"
+            }
+        }
+        return nil
     }
 
     public static func readClaudeUsage(paths: KaitoPaths = .default) -> UsageData? {

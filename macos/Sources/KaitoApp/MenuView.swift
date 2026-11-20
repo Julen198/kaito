@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 struct MenuView: View {
     @EnvironmentObject var model: AppModel
+    @StateObject private var tour = TourController()
     @State private var contentHeight: CGFloat = 400
     static let maxListHeight: CGFloat = 560
 
@@ -26,18 +27,23 @@ struct MenuView: View {
                 .padding(.bottom, 6)
             }
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    AgentsSection()
-                    if model.config.showUsage && !model.usage.isEmpty { UsageSection() }
-                    if model.config.jiraEnabled { JiraSection() }
-                    if model.config.tasksEnabled { TasksSection() }
-                    TodosSection()
-                    RemindersSection()
-                    NotesSection()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        AgentsSection().tourZone("agents", tour)
+                        if model.config.showUsage && !model.usage.isEmpty { UsageSection().tourZone("usage", tour) }
+                        if model.config.jiraEnabled { JiraSection().tourZone("board", tour) }
+                        if model.config.tasksEnabled { TasksSection().tourZone("tasks", tour) }
+                        TodosSection().tourZone("todos", tour)
+                        RemindersSection().tourZone("reminders", tour)
+                        NotesSection().tourZone("notes", tour)
+                    }
+                    .padding(12)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                 }
-                .padding(12)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                .onChange(of: tour.anchor) { _, a in
+                    if let a { withAnimation { proxy.scrollTo(a, anchor: .center) } }
+                }
             }
             // Un ScrollView no tiene altura ideal: en la ventana del MenuBarExtra se colapsaba a cero.
             .frame(height: min(contentHeight, Self.maxListHeight))
@@ -49,10 +55,18 @@ struct MenuView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
             }
+            if tour.active {
+                Divider()
+                TourCard(tour: tour)
+            }
             Divider()
-            footer
+            footer.tourZone("footer", tour)
         }
         .frame(width: 440)
+        .onAppear { tour.checkStart(model) }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            tour.checkStart(model)
+        }
     }
 
     private var header: some View {

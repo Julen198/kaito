@@ -69,6 +69,8 @@ public struct KaitoConfig: Sendable {
     public var dndSkipUntil: Double? = nil // epoch ms
     public var dndSilenceReminders = false
     public var bqMcpServer: String? = nil
+    /// El tour de bienvenida ya se vio (o se saltó).
+    public var tourDone = false
 
     public init() {}
 
@@ -133,6 +135,7 @@ public struct KaitoConfig: Sendable {
         c.dndSkipUntil = epoch("dndSkipUntil")
         c.dndSilenceReminders = raw["dndSilenceReminders"]?.bool == true
         if let b = raw["bqMcpServer"]?.string, !trimmed(b).isEmpty { c.bqMcpServer = trimmed(b) }
+        c.tourDone = raw["tourDone"]?.bool == true
         c.jiraCreateProject = raw["jiraCreateProject"]?.string
         c.jiraCreateStatus = raw["jiraCreateStatus"]?.string
         if let f = raw["jiraCreateFields"]?.object {

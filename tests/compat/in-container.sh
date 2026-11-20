@@ -22,13 +22,13 @@ mkdir -p $EXT && cp -a "$SRC"/. $EXT/ && rm -rf $EXT/.git $EXT/schemas/gschemas.
 glib-compile-schemas $EXT/schemas || res schemas FAIL
 
 # 1. Tests de GJS (detectan JS que el SpiderMonkey de esta versión no entiende).
-for t in kaito.test.js jiradraft.test.js tasks.test.js quiet.test.js providers.test.js board.test.js usage.test.js; do
+for t in kaito.test.js jiradraft.test.js tasks.test.js quiet.test.js providers.test.js board.test.js usage.test.js tour.test.js; do
     fresh $W/t-$t
     out=$(cd $EXT && timeout 120 dbus-run-session -- gjs -m $t 2>&1); rc=$?
     if [ $rc -eq 0 ]; then res "gjs:$t" PASS "$(echo "$out" | grep -E 'OK' | tail -1)"; else res "gjs:$t" FAIL "rc=$rc"; echo "$out" | tail -20; fi
 done
 if command -v node >/dev/null; then
-    for t in when.test.js quiet.test.js providers.test.js board.test.js usage.test.js; do
+    for t in when.test.js quiet.test.js providers.test.js board.test.js usage.test.js tour.test.js; do
         (cd $EXT && TZ=Europe/Madrid node $t >/dev/null 2>&1) && res node:$t PASS || res node:$t FAIL
     done
 else

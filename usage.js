@@ -6,20 +6,24 @@ export const USAGE_COLORS = {ok: '#5BC8AF', warn: '#FFA348', crit: '#E5493A'};
 /** Anillos: tamaño de diseño (px lógicos), grosor del trazo y pista. El dibujo escala con el tamaño real. */
 export const RING = {size: 36, stroke: 4.5};
 export const MINI_RING = {size: 16, stroke: 2.5};
+/** Anillo doble de cada columna: fuera la ventana de 5 h (más gruesa), dentro la semana. Radios al centro del trazo. */
+export const DUAL_RING = {size: 56, outer: {r: 25, stroke: 4}, inner: {r: 18.5, stroke: 3}, dash: 3};
 export const RING_TRACK = [1, 1, 1, 0.10];
 export const DIM_OPACITY = 140; // .55 · 255: datos reiniciados o viejos
-export const USAGE_COLUMNS = '5 h · semana';
 /** Proveedores con fila de uso, en este orden. */
 export const USAGE_ORDER = ['claude', 'codex', 'gemini', 'opencode'];
 export const PANEL_RING_PROVIDERS = ['claude', 'codex', 'none'];
 export const PANEL_RING_LABELS = ['Claude (5 h)', 'Codex (5 h)', 'Ninguno'];
 
-/** Insignia (cuadrado redondeado de 30 px) si no hay icono instalado: inicial sobre el color del proveedor. */
+/**
+ * Insignia del proveedor: inicial sobre su color si no hay icono instalado (bg/fg). En el centro del anillo
+ * doble va una baldosa de 18 px (tile/tileFg) con el icono de la app o, si no hay, la inicial.
+ */
 export const BADGES = {
-    claude: {name: 'Claude', letter: 'C', bg: '#D97757', fg: '#ffffff'},
-    codex: {name: 'Codex', letter: 'X', bg: '#e8e8e8', fg: '#111111'},
-    gemini: {name: 'Gemini', letter: 'G', bg: '#4C8DF6', fg: '#ffffff'},
-    opencode: {name: 'OpenCode', letter: 'O', bg: '#2b2b2f', fg: '#ffffff'},
+    claude: {name: 'Claude', letter: 'C', bg: '#D97757', fg: '#ffffff', tile: '#f6d3c0', tileFg: '#d6541a'},
+    codex: {name: 'Codex', letter: 'X', bg: '#e8e8e8', fg: '#111111', tile: '#ffffff', tileFg: '#1e1e1e'},
+    gemini: {name: 'Gemini', letter: 'G', bg: '#4C8DF6', fg: '#ffffff', tile: '#dbe7fd', tileFg: '#1a5fd6'},
+    opencode: {name: 'OpenCode', letter: 'O', bg: '#2b2b2f', fg: '#ffffff', tile: '#1e1e1e', tileFg: '#deddda'},
 };
 /** Nombres de icono (tema de iconos: /usr/share/icons, ~/.local/share/icons) que instalan sus apps. */
 export const BADGE_ICONS = {
@@ -144,9 +148,29 @@ export function opencodeNote(providerId) {
 }
 
 /**
- * Filas de la sección "Uso". views: {claude, codex} de usageView (null sin datos); enabled: agentProviders;
+ * Línea corta bajo el nombre de cada columna: "29 % · 65 %" (5 h · semana; "–" si falta una ventana) con
+ * datos vivos; la nota ("hace 7 d", "usa tu OpenAI", "sin datos de límite") si están viejos o no hay límites.
+ */
+export function usageLine(row) {
+    if (!row)
+        return '';
+    const rings = row.rings ?? [];
+    if (row.dim || !rings.some(Boolean))
+        return row.note ?? '';
+    return rings.slice(0, 2).map(r => r ? pctText(r.pct) : '–').join(' · ');
+}
+
+/** Nota de la cabecera "Uso": el primer reinicio vivo con su proveedor ("Claude reinicia 16:30"); '' si no hay. */
+export function usageHeadNote(rows) {
+    const r = (rows ?? []).find(x => !x.dim && x.rings?.some(Boolean) && /^reinicia /.test(x.note ?? ''));
+    return r ? `${r.name} ${r.note}` : '';
+}
+
+/**
+ * Columnas de la sección "Uso". views: {claude, codex} de usageView (null sin datos); enabled: agentProviders;
  * installed: {gemini, opencode} (Claude y Codex cuentan como instalados si hay datos suyos).
- * -> [{id, name, badge, rings: [anillo 5 h, anillo semana], note, dim, tooltip}]
+ * -> [{id, name, badge, rings: [anillo 5 h, anillo semana], note, line, limits, dim, tooltip}]
+ * limits: false si el proveedor no tiene límites legibles (anillo con pista discontinua y columna atenuada).
  */
 export function usageRows({views = {}, enabled = {}, installed = {}, opencode = null} = {}, nowS) {
     const rows = [];
@@ -160,14 +184,16 @@ export function usageRows({views = {}, enabled = {}, installed = {}, opencode = 
                 continue;
             const rings = [ringModel('five', v.five), ringModel('week', v.week)];
             const present = rings.filter(Boolean);
-            rows.push({
-                id, name: badge.name, badge, rings, note: usageNote(v, nowS),
+            const row = {
+                id, name: badge.name, badge, rings, note: usageNote(v, nowS), limits: true,
                 dim: present.length > 0 && present.every(r => r.dim), tooltip: usageTooltip(badge.name, v, nowS),
-            });
+            };
+            row.line = usageLine(row);
+            rows.push(row);
         } else if (installed[id]) {
             // Gemini CLI no guarda en local su cuota (es del servidor): no se inventa ningún número.
             const note = id === 'gemini' ? 'sin datos de límite' : opencodeNote(opencode);
-            rows.push({id, name: badge.name, badge, rings: [], note, dim: false, tooltip: `${badge.name} · ${note}`});
+            rows.push({id, name: badge.name, badge, rings: [], note, line: note, limits: false, dim: false, tooltip: `${badge.name} · ${note}`});
         }
     }
     return rows;
